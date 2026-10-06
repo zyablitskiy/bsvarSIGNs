@@ -15,4 +15,5 @@ arma::mat sample_hyper(
     const Rcpp::List& prior
 );
 
+
 #endif  // _SAMPLE_HYPER_H_

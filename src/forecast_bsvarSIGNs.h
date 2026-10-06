@@ -12,7 +12,6 @@ arma::cube forecast_bsvarSIGNs (
     arma::vec&    X_T,                // (K)
     arma::mat&    exogenous_forecast, // (horizon, d)
     arma::mat&    cond_forecast,      // (horizon, N)
-    const int&    covid,
     const int&    T,
     const int&    horizon
 );

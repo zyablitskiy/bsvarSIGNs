@@ -11,12 +11,19 @@ double log_weight_zero(
     const arma::field<arma::mat>& Z,
     const arma::mat&              B,
     const arma::mat&              h_inv,
-    const arma::mat&              Q
+    const arma::mat&              Q,
+    const arma::field<arma::mat>& W
 );
 
 arma::mat rzeroQ(
     const arma::field<arma::mat>& Z,
-    const arma::mat&              irf_0
+    const arma::field<arma::mat>& ZF
 );
+
+arma::field<arma::mat> ZIRF(
+    const arma::field<arma::mat>& Z,
+    const arma::mat& irf_0
+);
+
 
 #endif  // _RESTRICTIONS_ZERO_H_

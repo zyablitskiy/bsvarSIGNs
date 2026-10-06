@@ -15,7 +15,6 @@ Rcpp::List forecast_bsvarSIGNs (
     arma::vec&    X_T,                // (K)
     arma::mat&    exogenous_forecast, // (horizon, d)
     arma::mat&    cond_forecast,      // (horizon, N)
-    const int&    covid,
     const int&    T,
     const int&    horizon
 ) {
@@ -38,7 +37,7 @@ Rcpp::List forecast_bsvarSIGNs (
   cube        forecast_mean(N, horizon, S);
   cube        cov_s(N, N, horizon);
   field<cube> forecast_cov(S);
-
+  
   for (int s=0; s<S; s++) {
     
     if ( do_exog ) {
@@ -47,33 +46,12 @@ Rcpp::List forecast_bsvarSIGNs (
       Xt          = x_t;
     } // END if do_exog
     
-    // rescale the covariance matrix if covid is specified
-    vec scale = ones<vec>(T+horizon);
-    mat hyper = posterior_hyper.col(s);
-    if (covid > 0 && covid <= T) {
-      int c_idx = covid - 1;
-      double s0 = hyper(N + 3);
-      double s1 = hyper(N + 4);
-      double s2 = hyper(N + 5);
-      double rho = hyper(N + 6);
-
-      if (c_idx < T)
-        scale(c_idx) = s0;
-      if (c_idx + 1 < T)
-        scale(c_idx + 1) = s1;
-      if (c_idx + 2 < T)
-        scale(c_idx + 2) = s2;
-      for (int t = c_idx + 3; t < T+horizon; t++)
-      {
-        scale(t) = 1.0 + (s2 - 1.0) * std::pow(rho, t - c_idx - 2);
-      }
-    }
-
+    
     for (int h=0; h<horizon; h++) {
       
       mat   Sigma             = posterior_Sigma.slice(s);
       mat   mean              = posterior_A.slice(s) * Xt;
-      mat   cov               = std::pow(scale(T + h), 2.0) * Sigma;
+      mat   cov               = Sigma;
       vec   cond_forecast_h   = trans(cond_forecast.row(h));
       uvec  nonf_el           = find_nonfinite( cond_forecast_h );
       int   nonf_no           = nonf_el.n_elem;
@@ -94,11 +72,11 @@ Rcpp::List forecast_bsvarSIGNs (
       
       forecast_mean.slice(s).col(h) = mean;
       cov_s.slice(h) = cov;
-
+      
     } // END h loop
     
     forecast_cov(s) = cov_s;
-
+    
   } // END s loop
   
   return List::create(
@@ -107,4 +85,3 @@ Rcpp::List forecast_bsvarSIGNs (
     _["forecast_cov"]  = forecast_cov
   );
 } // END forecast_bsvarSIGNs
-

@@ -23,7 +23,7 @@ arma::mat metropolis(
   x        = log(x);
   vec xbar = x;
   double s = 2.38 / sqrt(n);
-  double d = log_target(x) + sum(x);
+  double d = log_target(exp(x)) + sum(x);
   
   double new_d, a;
   vec    new_x, diff;

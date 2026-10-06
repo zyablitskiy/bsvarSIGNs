@@ -2,7 +2,7 @@
 #define ARMA_WARN_LEVEL 1
 #include <RcppArmadillo.h>
 
-#include "utils_bsvarsigns.h"
+#include "utils.h"
 #include "mcmc.h"
 
 using namespace Rcpp;
@@ -10,7 +10,7 @@ using namespace arma;
 
 
 // log density of gamma distribution
-// [[Rcpp::interfaces(cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 double log_dgamma(
     const double& x,
@@ -23,7 +23,7 @@ double log_dgamma(
 
 
 // log density of inverse gamma distribution
-// [[Rcpp::interfaces(cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 double log_dinvgamma(
     const double& x,
@@ -36,7 +36,7 @@ double log_dinvgamma(
 
 
 // log prior density of hyper-parameters
-// [[Rcpp::interfaces(cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 double log_prior_hyper(
     const arma::vec&  hyper,
@@ -45,7 +45,6 @@ double log_prior_hyper(
 ) {
   
   double log_prior = 0, shape, scale;
-  int N = hyper.n_elem - 7;
   
   if (model(0)) {
     shape      = as<double>(prior["mu.shape"]);
@@ -66,24 +65,16 @@ double log_prior_hyper(
   }
   
   if (model(3)) {
-    shape      = as<double>(prior["psi.shape"]);
-    scale      = as<double>(prior["psi.scale"]);
-    for (int i = 3; i < N + 3; i++) {
-      log_prior += log_dinvgamma(hyper(i), shape, scale);
-    }
+    shape      = as<double>(prior["phi.shape"]);
+    scale      = as<double>(prior["phi.scale"]);
+    log_prior += log_dgamma(hyper(3), shape, scale);
   }
   
-  if (model.n_elem > 4 && model(4)) {
-    double s0 = hyper(N + 3);
-    double s1 = hyper(N + 4);
-    double s2 = hyper(N + 5);
-    double rho = hyper(N + 6);
-    
-    if (s0 < 1.0 || s1 < 1.0 || s2 < 1.0 || rho <= 0.0 || rho >= 1.0) {
-      log_prior += -1e10;
-    } else {
-      log_prior += -2.0 * std::log(s0) - 2.0 * std::log(s1) - 2.0 * std::log(s2);
-      log_prior += 2.0 * std::log(rho) + 0.5 * std::log(1.0 - rho);
+  if (model(4)) {
+    shape      = as<double>(prior["psi.shape"]);
+    scale      = as<double>(prior["psi.scale"]);
+    for (int i = 4; i < hyper.n_elem; i++) {
+      log_prior += log_dinvgamma(hyper(i), shape, scale);
     }
   }
   
@@ -92,7 +83,7 @@ double log_prior_hyper(
 
 
 // log multivariate gamma function
-// [[Rcpp::interfaces(cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 double log_mvgamma(
     const int&    n,
@@ -103,13 +94,13 @@ double log_mvgamma(
     return lgamma(x);
   }
   
-  double c = (n - 1) / 2;
+  double c = (n - 1) / 2.0;
   return c * log(M_PI) + lgamma(x - c) + log_mvgamma(n - 1, x);
 }
 
 
 // log marginal likelihood, notation as in Giannone, Lenza & Primiceri (2014)
-// [[Rcpp::interfaces(cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 double log_ml(
     const arma::mat& b,
@@ -121,7 +112,8 @@ double log_ml(
 ) {
   
   int T = Y.n_rows;
-  int    N         = Y.n_cols;
+  int N = Y.n_cols;
+  
   double log_ml    = 0;
   
   mat    inv_Omega = diagmat(1 / Omega.diag());
@@ -148,7 +140,7 @@ double log_ml(
 
 
 // log marginal likelihood with dummy observations
-// [[Rcpp::interfaces(cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 double log_ml_dummy(
     const arma::vec&  hyper,
@@ -159,17 +151,21 @@ double log_ml_dummy(
 ) {
   
   int    N           = Y.n_cols;
-  int    T           = Y.n_rows;
   int    p           = as<int>(prior["p"]);
   double mu          = hyper(0);
   double delta       = hyper(1);
   double lambda      = hyper(2);
-  vec    psi         = hyper.rows(3, N + 2);
+  double phi         = hyper(3);
+  vec    psi         = hyper.rows(4, N + 3);
   
   // update Minnesota prior
   mat    prior_B     = as<mat>(prior["B"]);
   vec    v           = as<mat>(prior["V"]).diag();
   v.rows(0, N*p - 1) = lambda * lambda * v.rows(0, N*p - 1) % repmat(1 / psi, p, 1);
+  uvec   idx_dummy   = as<uvec>(prior["idx_dummy"]);
+  if (idx_dummy.n_elem > 0) {
+    v.elem(idx_dummy).fill(1.0 / (phi * phi));
+  }
   mat    prior_V     = diagmat(v);
   mat    prior_S     = diagmat(psi);
   int    prior_nu    = as<int>(prior["nu"]);
@@ -179,47 +175,18 @@ double log_ml_dummy(
                                  as<mat>(prior["Ysur"]) / delta);
   mat    Xstar       = join_vert(as<mat>(prior["Xsoc"]) / mu, 
                                  as<mat>(prior["Xsur"]) / delta);
-                                 
-  mat    Y_scaled    = Y;
-  mat    X_scaled    = X;
-  double jacobian    = 0;
-  
-  int covid = as<int>(prior["covid"]);
-  if (covid > 0 && covid <= T) {
-    int c_idx = covid - 1;
-    double s0 = hyper(N + 3);
-    double s1 = hyper(N + 4);
-    double s2 = hyper(N + 5);
-    double rho = hyper(N + 6);
-    
-    vec scale = ones<vec>(T);
-    if (c_idx < T) scale(c_idx) = s0;
-    if (c_idx + 1 < T) scale(c_idx + 1) = s1;
-    if (c_idx + 2 < T) scale(c_idx + 2) = s2;
-    for (int t = c_idx + 3; t < T; t++) {
-      scale(t) = 1.0 + (s2 - 1.0) * std::pow(rho, t - c_idx - 2);
-    }
-    
-    Y_scaled.each_col() /= scale;
-    X_scaled.each_col() /= scale;
-    jacobian -= N * arma::accu(arma::log(scale));
-  }
-
-  mat    Yplus       = join_vert(Ystar, Y_scaled);
-  mat    Xplus       = join_vert(Xstar, X_scaled);
+  mat    Yplus       = join_vert(Ystar, Y);
+  mat    Xplus       = join_vert(Xstar, X);
   
   double log_ml_plus = log_ml(prior_B, prior_V, prior_S, prior_nu, Yplus, Xplus);
-  double log_ml_star = 0;
-  if (Ystar.n_rows > 0) {
-    log_ml_star = log_ml(prior_B, prior_V, prior_S, prior_nu, Ystar, Xstar);
-  }
+  double log_ml_star = log_ml(prior_B, prior_V, prior_S, prior_nu, Ystar, Xstar);
   
-  return log_ml_plus - log_ml_star + jacobian;
+  return log_ml_plus - log_ml_star;
 }
 
 
 // log posterior of hyper-parameters (up to a constant)
-// [[Rcpp::interfaces(r, cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 double log_posterior_hyper(
     const arma::vec&  hyper,
@@ -241,7 +208,7 @@ double log_posterior_hyper(
 }
 
 
-// [[Rcpp::interfaces(r, cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 arma::mat extend_hyper(
     const arma::vec& init,
@@ -269,21 +236,19 @@ arma::mat extend_hyper(
   }
   
   if (model(3)) {
-    int N = extended.n_rows - 7;
-    extended.rows(3, N + 2) = hypers.rows(i, i + N - 1);
-    i += N;
+    extended.row(3) = hypers.row(i);
+    i++;
   }
   
-  if (model.n_elem > 4 && model(4)) {
-    int N = extended.n_rows - 7;
-    extended.rows(N + 3, N + 6) = hypers.rows(i, i + 3);
+  if (model(4)) {
+    extended.rows(4, extended.n_rows - 1) = hypers.rows(i, hypers.n_rows - 1);
   }
   
   return extended;
 }
 
 
-// [[Rcpp::interfaces(r, cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 arma::mat narrow_hyper(
     const arma::vec& model,
@@ -291,7 +256,6 @@ arma::mat narrow_hyper(
 ) {
   
   uvec indices;
-  int N = hypers.n_rows - 7;
   
   if (!model(0)) {
     indices = join_vert(indices, uvec({0}));
@@ -306,13 +270,11 @@ arma::mat narrow_hyper(
   }
   
   if (!model(3)) {
-    indices = join_vert(indices, regspace<uvec>(3, N + 2));
+    indices = join_vert(indices, uvec({3}));
   }
   
-  if (model.n_elem > 4 && !model(4)) {
-    indices = join_vert(indices, regspace<uvec>(N + 3, N + 6));
-  } else if (model.n_elem <= 4) {
-    indices = join_vert(indices, regspace<uvec>(N + 3, N + 6));
+  if (!model(4)) {
+    indices = join_vert(indices, regspace<uvec>(4, hypers.n_rows - 1));
   }
   
   hypers.shed_rows(indices);
@@ -322,7 +284,7 @@ arma::mat narrow_hyper(
 
 
 // sample hyper-parameters
-// [[Rcpp::interfaces(r, cpp)]]
+// [[Rcpp:interface(cpp)]]
 // [[Rcpp::export]]
 arma::mat sample_hyper(
     const int&        S,

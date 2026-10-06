@@ -7,7 +7,6 @@
 #include "sample_hyper.h"
 #include "sample_Q.h"
 #include "sample_NIW.h"
-#include "sample_SOE.h"
 
 using namespace Rcpp;
 using namespace arma;
@@ -19,24 +18,29 @@ arma::field<arma::mat> bsvar_sign_single_draw_cpp(
     const arma::mat &Y,
     const arma::mat &X,
     const arma::cube &sign_irf,
+    const arma::cube &sign_irf_cum,
     const arma::mat &sign_narrative,
     const arma::mat &sign_B,
     const arma::field<arma::mat> &Z,
-    const int &Nf,
+    const arma::mat &elasticity,
+    const arma::mat &elasticity_cum,
+    const arma::mat &response_bounds,
+    const arma::mat &response_bounds_cum,
     const Rcpp::List &prior,
-    const int &max_tries,
-    const int idx
+    const arma::field<arma::mat>& W,
+    const int &max_tries
 ) {
   const int T = Y.n_rows;
   const int N = Y.n_cols;
   const int K = X.n_cols;
 
   mat hypers = as<mat>(prior["hyper"]);
+  int S_hyper  = hypers.n_cols - 1;
   int prior_nu = as<int>(prior["nu"]);
   int post_nu = prior_nu + T;
   int n_tries;
 
-  double w, mu, delta, lambda;
+  double w, mu, delta, lambda, phi;
 
   vec hyper, psi;
   vec prior_v = as<mat>(prior["V"]).diag();
@@ -52,45 +56,29 @@ arma::field<arma::mat> bsvar_sign_single_draw_cpp(
 
   field<mat> result;
 
-  hyper = hypers.col(hypers.n_cols > 1 ? idx : 0);
-  mu = hyper(0);
-  delta = hyper(1);
-  lambda = hyper(2);
-  psi = hyper.rows(3, N + 2);
-
+  hyper        = hypers.col(randi(distr_param(0, S_hyper)));
+  mu           = hyper(0);
+  delta        = hyper(1);
+  lambda       = hyper(2);
+  phi          = hyper(3);
+  psi          = hyper.rows(4, N + 3);
+  
   // update Minnesota prior
-  prior_V = diagmat(prior_v % join_vert(lambda * lambda * repmat(1 / psi, p, 1),
-                                        ones<vec>(K - N * p)));
+  vec v_all = prior_v % join_vert(lambda * lambda * repmat(1 / psi, p, 1),
+                                  ones<vec>(K - N * p));
+  uvec idx_dummy = as<uvec>(prior["idx_dummy"]);
+  if (idx_dummy.n_elem > 0) {
+    v_all.elem(idx_dummy).fill(1.0 / (phi * phi));   // Pandemic Priors
+  }
+  prior_V = diagmat(v_all);
   prior_S = diagmat(psi);
 
   // update dummy observation prior
   Ystar = join_vert(Ysoc / mu, Ysur / delta);
   Xstar = join_vert(Xsoc / mu, Xsur / delta);
 
-  mat Y_scaled = Y;
-  mat X_scaled = X;
-  int covid = as<int>(prior["covid"]);
-  vec sigma = ones<vec>(T);
-  if (covid > 0 && covid <= T) {
-    int c_idx = covid - 1;
-    double s0 = hyper(N + 3);
-    double s1 = hyper(N + 4);
-    double s2 = hyper(N + 5);
-    double rho = hyper(N + 6);
-
-    if (c_idx < T) sigma(c_idx) = s0;
-    if (c_idx + 1 < T) sigma(c_idx + 1) = s1;
-    if (c_idx + 2 < T) sigma(c_idx + 2) = s2;
-    for (int t = c_idx + 3; t < T; t++) {
-      sigma(t) = 1.0 + (s2 - 1.0) * std::pow(rho, t - c_idx - 2);
-    }
-
-    Y_scaled.each_col() /= sigma;
-    X_scaled.each_col() /= sigma;
-  }
-
-  Yplus = join_vert(Ystar, Y_scaled);
-  Xplus = join_vert(Xstar, X_scaled);
+  Yplus = join_vert(Ystar, Y);
+  Xplus = join_vert(Xstar, X);
 
   // posterior parameters
   result = niw_cpp(Yplus, Xplus, prior_B, prior_V, prior_S, prior_nu);
@@ -98,9 +86,11 @@ arma::field<arma::mat> bsvar_sign_single_draw_cpp(
   post_V = result(1);
   post_S = result(2);
   post_nu = as_scalar(result(3));
+  mat post_V_chol_lower = result(4);
 
   double log_w = -arma::datum::inf;
   n_tries = 0;
+  
 
   while (std::isinf(log_w) and (n_tries < max_tries or max_tries == 0)) {
 
@@ -110,32 +100,26 @@ arma::field<arma::mat> bsvar_sign_single_draw_cpp(
     Sigma = iwishrnd(post_S, post_nu);
     chol_Sigma = chol(Sigma, "lower");
 
-    double log_w_B = 0;
-    if (Nf > 0) {
-      arma::field<arma::mat> res_B = sample_restricted_B_cpp(post_B, post_V, Sigma, p, N, Nf, K);
-      B = res_B(0);
-      log_w_B = as_scalar(res_B(1));
-    } else {
-      B = rmatnorm_cpp(post_B, post_V, Sigma);
-    }
+    B = rmatnorm_cpp(post_B, post_V_chol_lower, chol_Sigma);
 
     h_invp = inv(trimatl(chol_Sigma)); // lower tri, h(Sigma) is upper tri
 
-    result = sample_Q(p, Y_scaled, X_scaled, B, h_invp, chol_Sigma, prior,
-                      sign_irf, sign_narrative, sign_B, Z, Nf, 1);
+    result = sample_Q(p, Y, X, B, h_invp, chol_Sigma, prior,
+                      sign_irf, sign_irf_cum, sign_narrative, sign_B, elasticity, elasticity_cum, response_bounds, response_bounds_cum, Z, 1, W);
     Q = result(0);
     shocks = result(1);
     double log_w_Q = as_scalar(result(2));
 
     if (!std::isinf(log_w_Q)) {
-      log_w = log_w_B + log_w_Q;
+      log_w = log_w_Q;
     }
     n_tries++;
   }
 
-  w = std::exp(log_w);
+  // w = std::exp(log_w);
+  w = log_w; // Pass the log-weight directly, do NOT exponentiate here.
 
-  arma::field<arma::mat> out(9);
+  arma::field<arma::mat> out(8);
   out(0) = arma::mat(1, 1, arma::fill::zeros); out(0)(0, 0) = w;
   out(1) = hyper;
   out(2) = B.t();
@@ -144,7 +128,6 @@ arma::field<arma::mat> bsvar_sign_single_draw_cpp(
   out(5) = Sigma;
   out(6) = chol_Sigma * Q;
   out(7) = shocks;
-  out(8) = repmat(sigma.t(), N, 1);
 
   return out;
 }
@@ -156,16 +139,20 @@ Rcpp::List bsvar_sign_par_cpp(
     const arma::mat &Y,
     const arma::mat &X,
     const arma::cube &sign_irf,
+    const arma::cube &sign_irf_cum,
     const arma::mat &sign_narrative,
     const arma::mat &sign_B,
     const arma::field<arma::mat> &Z,
-    const int &Nf,
+    const arma::mat &elasticity,
+    const arma::mat &elasticity_cum,
+    const arma::mat &response_bounds,
+    const arma::mat &response_bounds_cum,
     const Rcpp::List &prior,
-    const int &max_tries = 10000,
-    const int idx = 0
+    const arma::field<arma::mat>& W,
+    const int &max_tries = 10000
 ) {
   arma::field<arma::mat> draw = bsvar_sign_single_draw_cpp(
-    p, Y, X, sign_irf, sign_narrative, sign_B, Z, Nf, prior, max_tries, idx
+    p, Y, X, sign_irf, sign_irf_cum, sign_narrative, sign_B, Z, elasticity, elasticity_cum, response_bounds, response_bounds_cum, prior, W, max_tries
   );
 
   return List::create(
@@ -176,8 +163,7 @@ Rcpp::List bsvar_sign_par_cpp(
       _["Q"]      = draw(4),
       _["Sigma"]  = draw(5),
       _["Theta0"] = draw(6),
-      _["shocks"] = draw(7),
-      _["sigma"]  = draw(8)
+      _["shocks"] = draw(7)
   );
 }
 
@@ -188,22 +174,21 @@ Rcpp::List bsvar_sign_cpp(
     const int&        p,
     const arma::mat&  Y,
     const arma::mat&  X,
-    const arma::cube& sign_irf,
-    const arma::mat&  sign_narrative,
-    const arma::mat&  sign_B,
-    const arma::field<arma::mat>& Z,
-    const int&        Nf,
+    const arma::cube &sign_irf,
+    const arma::cube &sign_irf_cum,
+    const arma::mat &sign_narrative,
+    const arma::mat &sign_B,
+    const arma::field<arma::mat> &Z,
+    const arma::mat &elasticity,
+    const arma::mat &elasticity_cum,
+    const arma::mat &response_bounds,
+    const arma::mat &response_bounds_cum,
     const Rcpp::List& prior,
+    const arma::field<arma::mat>& W,
     const bool        show_progress = true,
-    const int         thin = 100,
     const int&        max_tries = 10000
 ) {
-  
-  std::string oo = "";
-  if ( thin != 1 ) {
-    oo      = bsvars::ordinal(thin) + " ";
-  }
-  
+
   // Progress bar setup
   double num_threads = 1;
   vec prog_rep_points = arma::round(arma::linspace(0, S / num_threads, 50));
@@ -232,14 +217,11 @@ Rcpp::List bsvar_sign_cpp(
   cube       posterior_Sigma(N, N, S);
   cube       posterior_Theta0(N, N, S);
   cube       posterior_shocks(N, T, S);
-  cube       posterior_sigma(N, T, S);
   
   for (int s = 0; s < S; s++) {
     
-    int idx = (hypers.n_cols > 1 ? hypers.n_cols - S + s : 0);
-    
     arma::field<arma::mat> draw = bsvar_sign_single_draw_cpp(
-      p, Y, X, sign_irf, sign_narrative, sign_B, Z, Nf, prior, max_tries, idx
+      p, Y, X, sign_irf, sign_irf_cum, sign_narrative, sign_B, Z, elasticity, elasticity_cum, response_bounds, response_bounds_cum, prior, W, max_tries
     );
     
     posterior_w(s)            = as_scalar(draw(0));
@@ -250,7 +232,6 @@ Rcpp::List bsvar_sign_cpp(
     posterior_Sigma.slice(s)  = draw(5);
     posterior_Theta0.slice(s) = draw(6);
     posterior_shocks.slice(s) = draw(7);
-    posterior_sigma.slice(s)  = draw(8);
     
     // Increment progress bar
     if (any(prog_rep_points == s)) bar.increment();
@@ -266,10 +247,7 @@ Rcpp::List bsvar_sign_cpp(
       _["Q"]        = posterior_Q,
       _["Sigma"]    = posterior_Sigma,
       _["Theta0"]   = posterior_Theta0,
-      _["shocks"]   = posterior_shocks,
-      _["sigma"]    = posterior_sigma
+      _["shocks"]   = posterior_shocks
     )
   );
 } // END bsvar_sign_cpp
-
-

@@ -8,8 +8,12 @@
 arma::cube bsvarSIGNs_structural_shocks (
     arma::cube&     posterior_B,    // (N, N, S)
     arma::cube&     posterior_A,    // (N, K, S)
+    arma::cube&     posterior_Theta0,    // (N, K, S)
     arma::mat&      Y,              // NxT dependent variables
-    arma::mat&      X               // KxT dependent variables
+    arma::mat&      X,               // KxT dependent variables
+    const bool      standardise = false,
+    arma::uvec      standardise_idx = 0
+    
 );
 
 
@@ -29,12 +33,18 @@ arma::cube ir1_cpp (
 );
 
 
+arma::cube cum_irf_cpp(
+    const arma::cube& irf
+);
+
+
 arma::field<arma::cube> bsvarSIGNs_ir (
     arma::cube&   posterior_B,        // (K, N, S)
     arma::cube&   posterior_Theta0,   // (N, N, S)
     const int     horizon,
     const int     p,
-    const bool    standardise = false
+    const bool    standardise = false,
+    arma::uvec      standardise_idx = 0
 );
 
 
