@@ -37,27 +37,50 @@
 #' specification   = specify_bsvarSIGN$new(monetary, sign_narrative = list(narrative))
 #' 
 #' @export
-specify_narrative = function(start, periods = 1, type = "S", sign = 1, shock = 1, var = NA) {
+specify_narrative = function(start,
+                             periods = 1,
+                             type = "S",
+                             sign = 1,
+                             shock = 1,
+                             var = NA) {
   
   if (start %% 1 != 0 || start <= 0) {
     stop("start must be a positive integer")
   }
+  
   if (periods %% 1 != 0 || periods <= 0) {
     stop("periods must be a positive integer")
   }
-  if (!(type %in% c("S", "A", "B"))) {
-    stop("type must be one of 'S', 'A', 'B'")
+  
+  if (!(type %in% c("S", "A", "B", "C"))) {
+    stop("type must be one of 'S', 'A', 'B', 'C'")
   }
+  
   if (!(sign %in% c(-1, 1))) {
     stop("sign must be one of -1, 1")
   }
-  if (shock %% 1 != 0 || shock <= 0) {
-    stop("shock must be a positive integer")
+  
+  if (!is.numeric(shock) ||
+      length(shock) == 0 ||
+      any(shock %% 1 != 0) ||
+      any(shock <= 0)) {
+    stop("shock must be a positive integer vector")
   }
+  
+  shock = unique(as.integer(shock))
+  
+  if (type != "C" && length(shock) != 1) {
+    stop("For types 'S', 'A', and 'B', shock must have length 1. Use type 'C' for multiple shocks.")
+  }
+  
   if (!is.na(var)) {
     if (var %% 1 != 0 || var <= 0) {
       stop("var must be a positive integer")
     }
+  }
+  
+  if (type == "C" && is.na(var)) {
+    stop("For type 'C' narrative restrictions, var must be provided.")
   }
   
   narrative = list(
@@ -68,9 +91,245 @@ specify_narrative = function(start, periods = 1, type = "S", sign = 1, shock = 1
     shock   = shock,
     var     = var
   )
+  
   class(narrative) = "narrative"
   narrative
 }
+
+## helper function to add N extra columns for type "C" narratives
+make_narrative_matrix = function(sign_narrative, p, N) {
+  
+  get_type = list(
+    "S" = 1,
+    "A" = 2,
+    "B" = 3,
+    "C" = 4
+  )
+  
+  n_narratives = length(sign_narrative)
+  
+  if (n_narratives == 0) {
+    narrative = matrix(0, 1, 6 + N)
+    narrative[1, 1:6] = c(0, 1, 1, 1, 1, 1)
+    return(narrative)
+  }
+  
+  narrative = matrix(0, n_narratives, 6 + N)
+  
+  for (i in seq_len(n_narratives)) {
+    
+    nr = sign_narrative[[i]]
+    
+    if (!inherits(nr, "narrative")) {
+      stop("Each element of sign_narrative must be of class 'narrative'.")
+    }
+    
+    type_num = get_type[[nr$type]]
+    
+    if (is.null(type_num)) {
+      stop("Unknown narrative type.")
+    }
+    
+    narrative[i, 1] = type_num
+    narrative[i, 2] = nr$sign
+    
+    # var is required for A, B, C.
+    # For S it is not used, but set it to 1 if missing.
+    narrative[i, 3] = ifelse(is.na(nr$var), 1, nr$var)
+    
+    narrative[i, 5] = nr$start - p
+    narrative[i, 6] = nr$periods - 1
+    
+    shocks = unique(as.integer(nr$shock))
+    
+    if (any(shocks < 1 | shocks > N)) {
+      stop("Narrative shock index is outside the valid range 1:N.")
+    }
+    
+    if (nr$type == "C") {
+      
+      if (length(shocks) == 0) {
+        stop("Type C narrative restriction requires at least one shock in the group.")
+      }
+      
+      # The scalar shock column is unused for type C.
+      narrative[i, 4] = 0
+      
+      # Group membership dummies.
+      # Column 6 + j corresponds to shock j.
+      narrative[i, 6 + shocks] = 1
+      
+    } else {
+      
+      if (length(shocks) != 1) {
+        stop("For narrative types S, A, and B, shock must be scalar.")
+      }
+      
+      narrative[i, 4] = shocks
+      
+      # Optional: also fill the group dummy column.
+      # Not needed for S/A/B, but harmless.
+      narrative[i, 6 + shocks] = 1
+    }
+  }
+  
+  narrative
+}
+
+
+
+#' Specify short-run elasticity restrictions
+#'
+#' @param shock integer vector: structural shock index.
+#' @param num_var integer vector: numerator variable index.
+#' @param den_var integer vector: denominator variable index.
+#' @param lower numeric vector: lower bound for ratio.
+#' @param upper numeric vector: upper bound for ratio.
+#' @param horizon integer vector: horizon, 0 for impact.
+#' @param use_abs logical vector: if TRUE, use abs(num)/abs(den).
+#'
+#' @return A matrix with columns:
+#' shock, num_var, den_var, lower, upper, horizon, use_abs.
+#'
+#' @export
+specify_elasticity = function(
+    shock,
+    num_var,
+    den_var,
+    lower = 0,
+    upper = 1,
+    horizon = 0,
+    use_abs = FALSE
+) {
+  n = max(
+    length(shock),
+    length(num_var),
+    length(den_var),
+    length(lower),
+    length(upper),
+    length(horizon),
+    length(use_abs)
+  )
+  
+  shock   = rep_len(as.integer(shock), n)
+  num_var = rep_len(as.integer(num_var), n)
+  den_var = rep_len(as.integer(den_var), n)
+  lower   = rep_len(as.numeric(lower), n)
+  upper   = rep_len(as.numeric(upper), n)
+  horizon = rep_len(as.integer(horizon), n)
+  use_abs = rep_len(as.logical(use_abs), n)
+  
+  if (any(shock <= 0) || any(num_var <= 0) || any(den_var <= 0)) {
+    stop("shock, num_var and den_var must be positive integers.")
+  }
+  
+  if (any(shock %% 1 != 0) || any(num_var %% 1 != 0) || any(den_var %% 1 != 0)) {
+    stop("shock, num_var and den_var must be integers.")
+  }
+  
+  if (any(horizon < 0) || any(horizon %% 1 != 0)) {
+    stop("horizon must be a non-negative integer.")
+  }
+  
+  lower[is.na(lower)] = -Inf
+  upper[is.na(upper)] =  Inf
+  
+  if (any(lower > upper)) {
+    stop("lower bound cannot be larger than upper bound.")
+  }
+  
+  
+  out = cbind(
+    shock   = shock,
+    num_var = num_var,
+    den_var = den_var,
+    lower   = lower,
+    upper   = upper,
+    horizon = horizon,
+    use_abs = as.numeric(use_abs)
+  )
+  
+  
+  class(out) = "elasticity"
+  out
+}
+
+
+
+#' Specify response bound restrictions
+#'
+#' @param var integer vector: variable index.
+#' @param shock integer vector: structural shock index.
+#' @param horizon integer vector: IRF horizon, 0 for impact.
+#' @param lower numeric vector: lower bound.
+#' @param upper numeric vector: upper bound.
+#' @param use_abs logical vector: if TRUE, restrict absolute value of response.
+#'
+#' @return A matrix with columns:
+#' var, shock, horizon, lower, upper, use_abs.
+#'
+#' @export
+specify_response_bound = function(
+    var,
+    shock,
+    horizon = 0,
+    lower = -Inf,
+    upper =  Inf,
+    use_abs = FALSE
+) {
+  n = max(
+    length(var),
+    length(shock),
+    length(horizon),
+    length(lower),
+    length(upper),
+    length(use_abs)
+  )
+  
+  var     = rep_len(as.integer(var), n)
+  shock   = rep_len(as.integer(shock), n)
+  horizon = rep_len(as.integer(horizon), n)
+  lower   = rep_len(as.numeric(lower), n)
+  upper   = rep_len(as.numeric(upper), n)
+  use_abs = rep_len(as.logical(use_abs), n)
+  
+  if (any(var <= 0) || any(shock <= 0)) {
+    stop("var and shock must be positive integers.")
+  }
+  
+  if (any(var %% 1 != 0) || any(shock %% 1 != 0) || any(horizon %% 1 != 0)) {
+    stop("var, shock and horizon must be integers.")
+  }
+  
+  if (any(horizon < 0)) {
+    stop("horizon must be a non-negative integer.")
+  }
+  
+  lower[is.na(lower)] = -Inf
+  upper[is.na(upper)] =  Inf
+  
+  if (any(lower > upper)) {
+    stop("lower bound cannot be larger than upper bound.")
+  }
+  
+  if (any(use_abs & lower < 0)) {
+    stop("If use_abs = TRUE, lower bound must be non-negative.")
+  }
+  
+  out = cbind(
+    var     = var,
+    shock   = shock,
+    horizon = horizon,
+    lower   = lower,
+    upper   = upper,
+    use_abs = as.numeric(use_abs)
+  )
+  
+  
+  class(out) = "response_bound"
+  out
+}
+
 
 # construct Z_j matrices
 get_Z = function(sign_irf) {
@@ -111,6 +370,78 @@ get_Z = function(sign_irf) {
   Z
 }
 
+
+verify_elasticity = function(N, elasticity) {
+  if (is.null(elasticity) || nrow(elasticity) == 0) {
+    return(invisible(TRUE))
+  }
+  
+  if (ncol(elasticity) != 7) {
+    stop("elasticity matrix must have 7 columns: shock, num_var, den_var, lower, upper, horizon, use_abs.")
+  }
+  
+  idx = elasticity[, 1:3, drop = FALSE]
+  
+  if (any(idx %% 1 != 0)) {
+    stop("shock, num_var and den_var must be integers.")
+  }
+  
+  if (any(idx < 1) || any(idx > N)) {
+    stop("shock, num_var and den_var must be between 1 and N.")
+  }
+  
+  if (any(elasticity[, 6] < 0)) {
+    stop("elasticity horizon must be non-negative.")
+  }
+  
+  if (any(elasticity[, 4] > elasticity[, 5])) {
+    stop("elasticity lower bound cannot be larger than upper bound.")
+  }
+  
+  invisible(TRUE)
+}
+
+
+verify_response_bounds = function(N, response_bounds) {
+  if (is.null(response_bounds) || nrow(response_bounds) == 0) {
+    return(invisible(TRUE))
+  }
+  
+  if (ncol(response_bounds) != 6) {
+    stop(
+      paste0(
+        "response_bounds matrix must have 6 columns: ",
+        "var, shock, horizon, lower, upper, use_abs."
+      )
+    )
+  }
+  
+  idx = response_bounds[, 1:2, drop = FALSE]
+  
+  if (any(idx %% 1 != 0)) {
+    stop("var and shock in response_bounds must be integers.")
+  }
+  
+  if (any(idx < 1) || any(idx > N)) {
+    stop("var and shock in response_bounds must be between 1 and N.")
+  }
+  
+  if (any(response_bounds[, 3] %% 1 != 0) || any(response_bounds[, 3] < 0)) {
+    stop("horizon in response_bounds must be a non-negative integer.")
+  }
+  
+  if (any(response_bounds[, 4] > response_bounds[, 5])) {
+    stop("lower bound cannot be larger than upper bound in response_bounds.")
+  }
+  
+  if (any(response_bounds[, 6] > 0.5 & response_bounds[, 4] < 0)) {
+    stop("If use_abs = TRUE, lower bound must be non-negative.")
+  }
+  
+  invisible(TRUE)
+}
+
+
 # verify if the matrix is NxN and has entries in {-1, 0, 1}
 verify_traditional = function(N, A) {
   if (!(is.matrix(A) && all(dim(A) == c(N, N)))) {
@@ -122,7 +453,7 @@ verify_traditional = function(N, A) {
 }
 
 # verify all restrictions
-verify_all = function(N, sign_irf, sign_narrative, sign_structural) {
+verify_all = function(N, sign_irf, sign_irf_cum, sign_narrative, sign_structural, elasticity, elasticity_cum, response_bounds, response_bounds_cum) {
   verify_traditional(N, sign_structural)
   if (any(sign_structural[!is.na(sign_structural)] == 0)) {
     stop("Zero restrictions are not allowed for sign_structural")
@@ -141,6 +472,15 @@ verify_all = function(N, sign_irf, sign_narrative, sign_structural) {
   for (h in 1:dim(sign_irf)[3]) {
     verify_traditional(N, sign_irf[,,h])
   }
+  
+  for (h in 1:dim(sign_irf_cum)[3]) {
+    verify_traditional(N, sign_irf_cum[,,h])
+  }
+  
+  verify_response_bounds(N, response_bounds)
+  verify_response_bounds(N, response_bounds_cum)
+  verify_elasticity(N, elasticity)
+  verify_elasticity(N, elasticity_cum)
 }
 
 
@@ -202,7 +542,7 @@ specify_prior_bsvarSIGN = R6::R6Class(
     #' @field p a positive integer - the number of lags.
     p           = 1,
     
-    #' @field hyper a \code{(N+3)xS} matrix of hyper-parameters \eqn{\mu, \delta, \lambda, \psi}.
+    #' @field hyper a \code{(N+4)xS} matrix of hyper-parameters \eqn{\mu, \delta, \lambda, \phi, \psi}.
     hyper      = matrix(),
     
     #' @field A a \code{NxK} normal prior mean matrix for the autoregressive 
@@ -260,14 +600,21 @@ specify_prior_bsvarSIGN = R6::R6Class(
     #' @field lambda.shape a positive scalar - the shape of the gamma prior for \eqn{\lambda}.
     lambda.shape = NA,
     
+    #' @field phi.scale a positive scalar - the scale of the gamma prior for \eqn{\phi}.
+    phi.scale   = NA,
+    
+    #' @field phi.shape a positive scalar - the shape of the gamma prior for \eqn{\phi}.
+    phi.shape   = NA,
+    
+    #' @field idx_dummy an integer vector of 0-based column positions in \code{X}
+    #' holding the Pandemic-Priors time dummies.
+    idx_dummy   = integer(0),
+    
     #' @field psi.scale a positive scalar - the shape of the inverted gamma prior for \eqn{\psi}.
     psi.scale   = NA,
     
     #' @field psi.shape a positive scalar - the shape of the inverted gamma prior for \eqn{\psi}.
     psi.shape   = NA,
-    
-    #' @field covid NULL or a positive integer indicating the start of the COVID-19 pandemic.
-    covid       = NULL,
     
     #' @description
     #' Create a new prior specification PriorBSVAR.
@@ -275,8 +622,8 @@ specify_prior_bsvarSIGN = R6::R6Class(
     #' @param p a positive integer - the autoregressive lag order of the SVAR model.
     #' @param exogenous a \code{Txd} matrix of exogenous variables.
     #' @param stationary an \code{N} logical vector - its element set to \code{FALSE} sets 
-    #' the prior mean for the autoregressive parameters of the \code{N}th equation to the random walk process, 
-    #' otherwise to white noise.
+    #' the prior mean for the autoregressive parameters of the \code{N}th equation to the white noise process, 
+    #' otherwise to random walk.
     #' @return A new prior specification PriorBSVARSIGN.
     #' @examples 
     #' # a prior for 5-variable example with one lag and stationary data
@@ -284,7 +631,9 @@ specify_prior_bsvarSIGN = R6::R6Class(
     #' prior = specify_prior_bsvarSIGN$new(optimism, p = 1)
     #' prior$B # show autoregressive prior mean
     #' 
-    initialize = function(data, p, exogenous = NULL, stationary = rep(FALSE,  ncol(data))) {
+    initialize = function(data, p, exogenous = NULL, stationary = rep(FALSE,  ncol(data)),
+                          dummy_cols = NULL) {
+      
       stopifnot("Argument p must be a positive integer number." = p > 0 & p %% 1 == 0)
       
       data_m  = bsvars::specify_data_matrices$new(data, p, exogenous)
@@ -316,13 +665,34 @@ specify_prior_bsvarSIGN = R6::R6Class(
         s2.ols[n] = sum(((diag(T - p - 5) - x %*% solve(t(x) %*% x) %*% t(x)) %*% y)^2) / (T - p - 5)
       }
       
-      hyper              = matrix(NA, N + 3 + 4, 1)
-      hyper[1:3]         = c(1, 1, 0.2)
-      hyper[4:(N + 3),]  = s2.ols
-      hyper[(N + 4):(N + 7),] = c(1, 1, 1, 0.8)
+      hyper              = matrix(NA, N + 4, 1)
+      hyper[1:4]         = c(1, 1, 0.2, 0.1)
+      hyper[5:(N + 4),]  = s2.ols
       
       scale   = gamma_scale(1, 1)
       shape   = gamma_shape(1, 1)
+      
+      ybar    = colMeans(matrix(Y[1:p,], ncol = N))
+      Ysoc    = diag(ybar)
+      Ysur    = t(ybar)
+      Xsoc    = cbind(kronecker(t(rep(1, p)), Ysoc), matrix(0, N, d + 1))
+      Xsur    = cbind(kronecker(t(rep(1, p)), Ysur), 1, matrix(0, 1, d))
+      
+      idx_dummy = integer(0)
+      if (!is.null(dummy_cols)) {
+        stopifnot("dummy_cols must index columns of exogenous." =
+                    d > 0 && all(dummy_cols %in% 1:d))
+        idx_dummy = as.integer(N * p + dummy_cols)   # 0-based positions in X
+      }
+      
+      # Ystar   = rbind(diag(ybar), ybar)
+      # Xstar   = Ystar
+      # if (p > 1) {
+      #   for (i in 2:p) {
+      #     Xstar = cbind(Xstar, Ystar)
+      #   }
+      # }
+      # Xstar   = cbind(Xstar, c(rep(0, N), 1), matrix(0, N + 1, d))
       
       self$p             = p
       self$hyper         = hyper
@@ -332,12 +702,6 @@ specify_prior_bsvarSIGN = R6::R6Class(
       self$nu            = N + 2
       self$Y             = t(Y)
       self$X             = t(X)
-      ybar    = colMeans(matrix(Y[1:p,], ncol = N))
-      Ysoc    = diag(ybar)
-      Xsoc    = cbind(kronecker(t(rep(1, p)), Ysoc), matrix(0, N, d + 1))
-      Ysur    = t(ybar)
-      Xsur    = cbind(kronecker(t(rep(1, p)), Ysur), 1, matrix(0, 1, d))
-      
       self$Ysoc          = t(Ysoc)
       self$Xsoc          = t(Xsoc)
       self$Ysur          = t(Ysur)
@@ -348,6 +712,9 @@ specify_prior_bsvarSIGN = R6::R6Class(
       self$delta.shape   = shape
       self$lambda.scale  = gamma_scale(0.2, 0.4)
       self$lambda.shape  = gamma_shape(0.2, 0.4)
+      self$phi.scale     = gamma_scale(0.1, 0.5)
+      self$phi.shape     = gamma_shape(0.1, 0.5)
+      self$idx_dummy     = idx_dummy
       self$psi.scale     = igamma_scale(0.02^2, 0.02^2)
       self$psi.shape     = igamma_shape(0.02^2, 0.02^2)
     }, # END initialize
@@ -378,11 +745,88 @@ specify_prior_bsvarSIGN = R6::R6Class(
         delta.shape  = self$delta.shape,
         lambda.scale = self$lambda.scale,
         lambda.shape = self$lambda.shape,
+        phi.scale    = self$phi.scale,
+        phi.shape    = self$phi.shape,
+        idx_dummy    = self$idx_dummy,
         psi.scale    = self$psi.scale,
-        psi.shape    = self$psi.shape,
-        covid        = ifelse(is.null(self$covid), -1, self$covid)
+        psi.shape    = self$psi.shape
       )
-    } # END get_prior    
+    }, # END get_prior
+    
+    #' @description
+    #' Estimates hyper-parameters with adaptive Metropolis algorithm.
+    #' 
+    #' @param mu whether to estimate the hyper-parameter in the 
+    #' sum-of-coefficients dummy prior.
+    #' @param delta whether to estimate the hyper-parameter in the 
+    #' single-unit-root dummy prior.
+    #' @param lambda whether to estimate the hyper-parameter of the 
+    #' shrinkage in the Minnesota prior.
+    #' @param psi whether to estimate the hyper-parameter of the 
+    #' variances in the Minnesota prior.
+    #' @param S number of MCMC draws.
+    #' @param burn_in number of burn-in draws.
+    #' 
+    #' @examples 
+    #' # specify the model and set seed
+    #' set.seed(123)
+    #' data(optimism)
+    #' prior = specify_prior_bsvarSIGN$new(optimism, p = 4)
+    #' 
+    #' # estimate hyper parameters with adaptive Metropolis algorithm
+    #' prior$estimate_hyper(S = 10, psi = TRUE)
+    #'
+    #' # trace plot
+    #' hyper = t(prior$hyper)
+    #' colnames(hyper) = c("mu", "delta", "lambda", paste("psi", 1:5, sep = ""))
+    #' plot.ts(hyper)
+    #' 
+    estimate_hyper = function(
+      S = 10000, burn_in = S / 2,
+      mu = FALSE, delta = FALSE, lambda = TRUE, phi = FALSE, psi = FALSE
+      ) {
+      
+      model = c(mu, delta, lambda, phi, psi)
+      
+      if (all(!model)) {
+        stop("At least one of the hyper-parameters must be estimated.")
+      }
+      
+      hyper  = matrix(self$hyper[, ncol(self$hyper)])
+      init   = narrow_hyper(model, hyper)
+      prior  = self$get_prior()
+      
+      prior$B    = t(prior$A)
+      prior$Ysoc = t(prior$Ysoc)
+      prior$Xsoc = t(prior$Xsoc)
+      prior$Ysur = t(prior$Ysur)
+      prior$Xsur = t(prior$Xsur)
+      
+      result = stats::optim(
+        init,
+        \(x) -log_posterior_hyper(extend_hyper(hyper, model, matrix(x)), 
+                                  model, t(self$Y), t(self$X), prior),
+        method  = 'L-BFGS-B',
+        lower   = rep(0, length(init)),
+        upper   = init * 100,
+        hessian = TRUE
+        )
+
+      mode       = extend_hyper(hyper, model, matrix(result$par))
+      variance   = result$hessian
+
+      if (length(init) == 1){
+        variance = 1 / variance
+      } else {
+        e        = eigen(variance)
+        variance = e$vectors %*% diag(as.vector(1 / abs(e$values))) %*% t(e$vectors)
+      }
+      
+      self$hyper = sample_hyper(S, burn_in, mode, model, 
+                                t(self$Y), t(self$X), variance, prior)
+      self$hyper = self$hyper[, -(1:burn_in)]
+    } # END estimate_hyper
+    
   ) # END public
 ) # END specify_prior_bsvarSIGN
 
@@ -412,10 +856,20 @@ specify_identification_bsvarSIGN = R6::R6Class(
     VB       = list(),
     #' @field sign_irf a \code{NxNxH} array of sign restrictions on the impulse response functions.
     sign_irf = array(),
+    #' @field sign_irf_cum a \code{NxNxH} array of sign restrictions on the cumulative impulse response functions.
+    sign_irf_cum = array(),
     #' @field sign_narrative a \code{ANYx6} matrix of narrative sign restrictions.
     sign_narrative  = matrix(),
     #' @field sign_structural a \code{NxN} matrix of sign restrictions on contemporaneous relations.
     sign_structural   = matrix(),
+    #' @field elasticity a \code{ANYx7} matrix of elasticity restrictions.
+    elasticity   = matrix(),
+    #' @field elasticity_cum a \code{ANYx7} matrix of elasticity restrictions. Helpful when restricting level response to growth rate variable.
+    elasticity_cum   = matrix(),
+    #' @field response_bounds a \code{ANYx6} matrix of response bounds restrictions.
+    response_bounds   = matrix(),
+    #' @field response_bounds_cum a \code{ANYx6} matrix of response bounds restrictions. Helpful when restricting level response to growth rate variable.
+    response_bounds_cum   = matrix(),
     #' @field max_tries a positive integer with the maximum number of iterations 
     #' for finding a rotation matrix \eqn{Q} that would satisfy sign restrictions.
     max_tries = Inf,
@@ -428,14 +882,23 @@ specify_identification_bsvarSIGN = R6::R6Class(
     #' 0 for zero restrictions and NA for no restrictions,
     #' the \code{h}-th slice \code{NxN} matrix contains the
     #' restrictions on the \code{h-1} horizon.
+    #' @param sign_irf_cum a \code{NxNxH} array - sign and zero restrictions 
+    #' on the cumulative impulse response functions, ±1 for positive/negative sign restriction
+    #' 0 for zero restrictions and NA for no restrictions,
+    #' the \code{h}-th slice \code{NxN} matrix contains the
+    #' restrictions on the \code{h-1} horizon. Helpful when restricting level response to growth rate variable.
     #' @param sign_narrative a list of objects of class "narrative" - narrative sign restrictions.
     #' @param sign_structural a \code{NxN} matrix with entries ±1 or NA - sign restrictions on the
     #' contemporaneous relations \code{B} between reduced-form errors \code{E} and
     #' structural shocks \code{U} where \code{BE=U}.
+    #' @param elasticity an object of class "elasticity" - elasticity restrictions.
+    #' @param elasticity_cum an object of class "elasticity" - elasticity restrictions. Helpful when restricting level response to growth rate variable.
+    #' @param response_bounds an object of class "response_bounds" - response_bounds restrictions.
+    #' @param response_bounds_cum an object of class "response_bounds" - response_bounds restrictions. Helpful when restricting level response to growth rate variable.
     #' @param max_tries a positive integer with the maximum number of iterations
     #' for finding a rotation matrix \eqn{Q} that would satisfy sign restrictions.
     #' @return Identifying restrictions IdentificationBSVARSIGN.
-    initialize = function(N, sign_irf, sign_narrative, sign_structural, max_tries = Inf) {
+    initialize = function(N, sign_irf, sign_irf_cum, sign_narrative, sign_structural, elasticity, elasticity_cum, response_bounds, response_bounds_cum, max_tries = Inf) {
         
       missing_all   = TRUE
       if (missing(sign_irf)) {
@@ -443,8 +906,33 @@ specify_identification_bsvarSIGN = R6::R6Class(
       } else {
         missing_all = FALSE
       }
+      if (missing(sign_irf_cum)) {
+        sign_irf_cum = array(rep(NA, N^2), dim = c(N, N, 1))
+      } else {
+        missing_all = FALSE
+      }
       if (missing(sign_narrative)) {
         sign_narrative = list()
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(elasticity)) {
+        elasticity = NULL
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(elasticity_cum)) {
+        elasticity_cum = NULL
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(response_bounds)) {
+        response_bounds = NULL
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(response_bounds_cum)) {
+        response_bounds_cum = NULL
       } else {
         missing_all = FALSE
       }
@@ -458,7 +946,11 @@ specify_identification_bsvarSIGN = R6::R6Class(
       if (is.matrix(sign_irf)) {
         sign_irf = array(sign_irf, dim = c(dim(sign_irf), 1))
       }
-      verify_all(N, sign_irf, sign_narrative, sign_structural)
+      if (is.matrix(sign_irf_cum)) {
+        sign_irf_cum = array(sign_irf_cum, dim = c(dim(sign_irf_cum), 1))
+      }
+      
+      verify_all(N, sign_irf, sign_irf_cum, sign_narrative, sign_structural, elasticity, elasticity_cum, response_bounds, response_bounds_cum)
       
       B     = matrix(FALSE, N, N)
       B[lower.tri(B, diag = TRUE)] = TRUE
@@ -469,9 +961,14 @@ specify_identification_bsvarSIGN = R6::R6Class(
       }
       
       self$sign_irf       = sign_irf
+      self$sign_irf_cum       = sign_irf_cum
       self$sign_narrative = sign_narrative
       self$sign_structural  = sign_structural
       self$max_tries      = max_tries
+      self$elasticity     = elasticity
+      self$elasticity_cum     = elasticity_cum
+      self$response_bounds = response_bounds
+      self$response_bounds_cum = response_bounds_cum
     }, # END initialize
     
     #' @description
@@ -481,8 +978,13 @@ specify_identification_bsvarSIGN = R6::R6Class(
       list(
         VB             = as.list(self$VB),
         sign_irf       = as.array(self$sign_irf),
+        sign_irf_cum   = as.array(self$sign_irf_cum),
         sign_narrative = self$sign_narrative,
         sign_structural  = as.matrix(self$sign_structural),
+        elasticity     = self$elasticity,
+        elasticity_cum     = self$elasticity_cum,
+        response_bounds = self$response_bounds,
+        response_bounds_cum = self$response_bounds_cum,
         max_tries      = self$max_tries
         )
     }, # END get_identification
@@ -495,13 +997,22 @@ specify_identification_bsvarSIGN = R6::R6Class(
     #' 0 for zero restrictions and NA for no restrictions,
     #' the \code{h}-th slice \code{NxN} matrix contains the
     #' restrictions on the \code{h-1} horizon.
+    #' @param sign_irf_cum a \code{NxNxH} array - sign and zero restrictions 
+    #' on the cumulative impulse response functions, ±1 for positive/negative sign restriction
+    #' 0 for zero restrictions and NA for no restrictions,
+    #' the \code{h}-th slice \code{NxN} matrix contains the
+    #' restrictions on the \code{h-1} horizon. Helpful when restricting level response to growth rate variable.
     #' @param sign_narrative a list of objects of class "narrative" - narrative sign restrictions.
     #' @param sign_structural a \code{NxN} matrix with entries ±1 or NA - sign restrictions on the
     #' contemporaneous relations \code{B} between reduced-form errors \code{E} and
     #' structural shocks \code{U} where \code{BE=U}.
+    #' @param elasticity an object of class "elasticity" - elasticity restrictions.
+    #' @param elasticity_cum an object of class "elasticity" - elasticity restrictions. Helpful when restricting level response to growth rate variable.
+    #' @param response_bounds an object of class "response_bounds" - response_bounds restrictions.
+    #' @param response_bounds_cum an object of class "response_bounds" - response_bounds restrictions. Helpful when restricting level response to growth rate variable.
     #' @param max_tries a positive integer with the maximum number of iterations
     #' for finding a rotation matrix \eqn{Q} that would satisfy sign restrictions
-    set_identification = function(N, sign_irf, sign_narrative, sign_structural) {
+    set_identification = function(N, sign_irf, sign_narrative, sign_structural, elasticity, response_bounds) {
       B     = matrix(FALSE, N, N)
       B[lower.tri(B, diag = TRUE)] = TRUE
       
@@ -516,8 +1027,33 @@ specify_identification_bsvarSIGN = R6::R6Class(
       } else {
         missing_all = FALSE
       }
+      if (missing(sign_irf_cum)) {
+        sign_irf_cum = array(rep(NA, N^2), dim = c(N, N, 1))
+      } else {
+        missing_all = FALSE
+      }
       if (missing(sign_narrative)) {
         sign_narrative = list()
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(elasticity)) {
+        elasticity = NULL
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(elasticity_cum)) {
+        elasticity_cum = NULL
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(response_bounds)) {
+        response_bounds = NULL
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(response_bounds_cum)) {
+        response_bounds_cum = NULL
       } else {
         missing_all = FALSE
       }
@@ -527,15 +1063,25 @@ specify_identification_bsvarSIGN = R6::R6Class(
           diag(sign_structural) = 1
         }
       }
+
       
       if (is.matrix(sign_irf)) {
         sign_irf = array(sign_irf, dim = c(dim(sign_irf), 1))
       }
-      verify_all(N, sign_irf, sign_narrative, sign_structural)
+      if (is.matrix(sign_irf_cum)) {
+        sign_irf_cum = array(sign_irf_cum, dim = c(dim(sign_irf_cum), 1))
+      }
+      
+      verify_all(N, sign_irf, sign_irf_cum, sign_narrative, sign_structural, elasticity, elasticity_cum, response_bounds, response_bounds_cum)
       
       self$sign_irf       = sign_irf
+      self$sign_irf_cum       = sign_irf_cum
       self$sign_narrative = sign_narrative
       self$sign_structural  = sign_structural
+      self$elasticity     = elasticity
+      self$elasticity_cum     = elasticity_cum
+      self$response_bounds     = response_bounds
+      self$response_bounds_cum     = response_bounds_cum
     } # END set_identification
   ) # END public
 ) # END specify_identification_bsvarSIGN
@@ -561,13 +1107,6 @@ specify_identification_bsvarSIGN = R6::R6Class(
 #' @export
 specify_bsvarSIGN = R6::R6Class(
   "BSVARSIGN",
-  private = list(
-    hyper_mu = TRUE,
-    hyper_delta = TRUE,
-    hyper_lambda = TRUE,
-    hyper_psi = TRUE,
-    hyper_covid = NULL
-  ),
   
   public = list(
     
@@ -586,12 +1125,6 @@ specify_bsvarSIGN = R6::R6Class(
     #' @field starting_values an object StartingValuesBSVARSIGN with the starting values.
     starting_values        = list(),
     
-    #' @field num_foreign_vars a non-negative integer specifying the number of foreign variables.
-    num_foreign_vars       = numeric(),
-    
-    #' @field mc.cores number of cores to use for parallel computing.
-    mc.cores               = numeric(),
-    
     #' @description
     #' Create a new specification of the Bayesian Structural VAR model with sign and narrative restrictions BSVARSIGN.
     #' @param data a \code{(T+p)xN} matrix with time series data.
@@ -601,54 +1134,44 @@ specify_bsvarSIGN = R6::R6Class(
     #' 0 for zero restrictions and NA for no restrictions,
     #' the \code{h}-th slice \code{NxN} matrix contains the
     #' restrictions on the \code{h-1} horizon.
+    #' @param sign_irf_cum a \code{NxNxH} array - sign and zero restrictions 
+    #' on the cumulative impulse response functions, ±1 for positive/negative sign restriction
+    #' 0 for zero restrictions and NA for no restrictions,
+    #' the \code{h}-th slice \code{NxN} matrix contains the
+    #' restrictions on the \code{h-1} horizon. Helpful when restricting level response to growth rate variable.
     #' @param sign_narrative a list of objects of class "narrative" - narrative sign restrictions.
     #' @param sign_structural a \code{NxN} matrix with entries ±1 or NA - sign restrictions on the
     #' contemporaneous relations \code{B} between reduced-form errors \code{E} and
     #' structural shocks \code{U} where \code{BE=U}.
+    #' @param elasticity an object of class "elasticity" - elasticity restrictions.
+    #' @param elasticity_cum an object of class "elasticity" - elasticity restrictions. Helpful when restricting level response to growth rate variable.
+    #' @param response_bounds an object of class "response_bounds" - response_bounds restrictions.
+    #' @param response_bounds_cum an object of class "response_bounds" - response_bounds restrictions. Helpful when restricting level response to growth rate variable.
     #' @param max_tries a positive integer with the maximum number of iterations
     #' for finding a rotation matrix \eqn{Q} that would satisfy sign restrictions
     #' @param exogenous a \code{(T+p)xd} matrix of exogenous variables.
-    #' @param foreign a matrix of foreign variables for a Small Open Economy (SOE) model. Defaults to NULL.
-    #' @param stationary an \code{N} logical vector - its element set to \code{FALSE} sets 
-    #' the prior mean for the autoregressive parameters of the \code{N}th equation to the random walk process, 
-    #' otherwise to white noise.
-    #' @param hyper_mu whether to estimate the hyper-parameter in the sum-of-coefficients dummy prior.
-    #' @param hyper_delta whether to estimate the hyper-parameter in the single-unit-root dummy prior.
-    #' @param hyper_lambda whether to estimate the hyper-parameter of the shrinkage in the Minnesota prior.
-    #' @param hyper_psi whether to estimate the hyper-parameter of the variances in the Minnesota prior.
-    #' @param hyper_covid NULL or positive integer indicating the start of the COVID-19 pandemic.
-    #' @param mc.cores number of cores to use for parallel computing. Default is 1. We recommend setting it to \code{parallel::detectCores() - 1}.
+    #' @param stationary an \code{N} logical vector - its element set to \code{FALSE} sets
+    #' the prior mean for the autoregressive parameters of the \code{N}th equation to the white noise process,
+    #' otherwise to random walk.
     #' @return A new complete specification for the Bayesian Structural VAR model BSVARSIGN.
     initialize = function(
     data,
     p = 1L,
     sign_irf,
+    sign_irf_cum,
     sign_narrative,
     sign_structural,
+    elasticity,
+    elasticity_cum,
+    response_bounds,
+    response_bounds_cum,
     max_tries = Inf,
     exogenous = NULL,
-    foreign = NULL,
-    stationary = NULL,
-    hyper_mu = TRUE,
-    hyper_delta = TRUE,
-    hyper_lambda = TRUE,
-    hyper_psi = TRUE,
-    hyper_covid = NULL,
-    mc.cores = 1
+    dummy_cols = NULL,
+    stationary = rep(FALSE, ncol(data))
     ) {
       stopifnot("Argument p has to be a positive integer." = ((p %% 1) == 0 & p > 0))
       self$p        = p
-      
-      if (!is.null(foreign)) {
-        if (!is.matrix(foreign)) foreign = as.matrix(foreign)
-        if (nrow(foreign) != nrow(data)) stop("foreign must have the same number of rows as data.")
-        data = cbind(foreign, data)
-        num_foreign_vars = ncol(foreign)
-      } else {
-        num_foreign_vars = 0
-      }
-      
-      if (is.null(stationary)) stationary = rep(FALSE, ncol(data))
       
       TT            = nrow(data)
       T             = TT - self$p
@@ -664,8 +1187,33 @@ specify_bsvarSIGN = R6::R6Class(
       } else {
         missing_all = FALSE
       }
+      if (missing(sign_irf_cum)) {
+        sign_irf_cum = array(rep(NA, N^2), dim = c(N, N, 1))
+      } else {
+        missing_all = FALSE
+      }
       if (missing(sign_narrative)) {
         sign_narrative = list()
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(elasticity)) {
+        elasticity = NULL
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(elasticity_cum)) {
+        elasticity_cum = NULL
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(response_bounds)) {
+        response_bounds = NULL
+      } else {
+        missing_all = FALSE
+      }
+      if (missing(response_bounds_cum)) {
+        response_bounds_cum = NULL
       } else {
         missing_all = FALSE
       }
@@ -679,24 +1227,12 @@ specify_bsvarSIGN = R6::R6Class(
       if (is.matrix(sign_irf)) {
         sign_irf = array(sign_irf, dim = c(dim(sign_irf), 1))
       }
-      verify_all(N, sign_irf, sign_narrative, sign_structural)
-      
-      if (num_foreign_vars > 0) {
-        zero_irf = sign_irf[, , 1] == 0
-        zero_irf[is.na(zero_irf)] = 0
-        if (sum(zero_irf) > 0) {
-          stop("Zero restrictions are not supported for Small Open Economy (SOE) models.")
-        }
+      if (is.matrix(sign_irf_cum)) {
+        sign_irf_cum = array(sign_irf_cum, dim = c(dim(sign_irf_cum), 1))
       }
       
-      private$hyper_mu             = hyper_mu
-      private$hyper_delta          = hyper_delta
-      private$hyper_lambda         = hyper_lambda
-      private$hyper_psi            = hyper_psi
-      private$hyper_covid          = hyper_covid
+      verify_all(N, sign_irf, sign_irf_cum, sign_narrative, sign_structural, elasticity, elasticity_cum, response_bounds, response_bounds_cum)
       
-      self$num_foreign_vars        = num_foreign_vars
-      self$mc.cores                = mc.cores
       
       B                            = matrix(FALSE, N, N)
       B[lower.tri(B, diag = TRUE)] = TRUE
@@ -704,12 +1240,17 @@ specify_bsvarSIGN = R6::R6Class(
       self$data_matrices           = bsvars::specify_data_matrices$new(data, p, exogenous)
       self$identification          = specify_identification_bsvarSIGN$new(N,
                                                                           sign_irf,
+                                                                          sign_irf_cum,
                                                                           sign_narrative,
                                                                           sign_structural,
+                                                                          elasticity,
+                                                                          elasticity_cum,
+                                                                          response_bounds,
+                                                                          response_bounds_cum,
                                                                           max_tries)
       self$prior                   = specify_prior_bsvarSIGN$new(data, p, exogenous,
-                                                                 stationary)
-      # self$starting_values         = bsvars::specify_starting_values_bsvar$new(N, self$p, d)
+                                                                 stationary, dummy_cols)
+      self$starting_values         = bsvars::specify_starting_values_bsvar$new(N, self$p, d)
     }, # END initialize
     
     #' @description
@@ -727,119 +1268,9 @@ specify_bsvarSIGN = R6::R6Class(
     #' # get the data matrices
     #' spec$get_data_matrices()
     #'
-    get_data_matrices    = function() {
+    get_data_matrices = function() {
       self$data_matrices$clone()
     }, # END get_data_matrices
-    
-    #' @description
-    #' Sets the sum-of-coefficients and single-unit-root dummy observations to zero 
-    #' (removes the dummy observation prior).
-    #' 
-    #' @examples
-    #' # specify the model
-    #' data(optimism)
-    #' spec = specify_bsvarSIGN$new(optimism, p = 4)
-    #' spec$no_dummy_observations() # remove dummy observations
-    #' 
-    no_dummy_observations = function() {
-      self$prior$Ysoc = matrix(NA, nrow(self$prior$Ysoc), 0)
-      self$prior$Xsoc = matrix(NA, nrow(self$prior$Xsoc), 0)
-      self$prior$Ysur = matrix(NA, nrow(self$prior$Ysur), 0)
-      self$prior$Xsur = matrix(NA, nrow(self$prior$Xsur), 0)
-    }, # END no_dummy_observations
-    
-    #' @description
-    #' Estimates hyper-parameters with adaptive Metropolis algorithm.
-    #' 
-    #' @param S number of MCMC draws.
-    #' @param burn_in number of burn-in draws.
-    #' 
-    #' @examples 
-    #' # specify the model and set seed
-    #' set.seed(123)
-    #' data(optimism)
-    #' spec = specify_bsvarSIGN$new(optimism, p = 4)
-    #' 
-    #' # estimate hyper parameters with adaptive Metropolis algorithm
-    #' spec$estimate_hyper(S = 10)
-    #'
-    #' # trace plot
-    #' hyper = t(spec$prior$hyper)[, 4:8]
-    #' colnames(hyper) = paste("psi", 1:5, sep = "")
-    #' plot.ts(hyper)
-    #' 
-    estimate_hyper = function(
-      S = 10000, burn_in = S / 2
-      ) {
-      
-      model = c(private$hyper_mu, private$hyper_delta, private$hyper_lambda, private$hyper_psi, !is.null(private$hyper_covid))
-      covid = private$hyper_covid
-      
-      if (all(!model)) {
-        stop("At least one of the hyper-parameters must be estimated.")
-      }
-      
-      if (!is.null(covid)) {
-        if (covid %% 1 != 0 || covid <= 0) {
-          stop("covid must be a positive integer or NULL")
-        }
-        if (covid > ncol(self$prior$Y)) {
-          stop(paste0("covid must be less than or equal to the number of observations used for estimation (T = ", ncol(self$prior$Y), "). Please remember that the first p observations are used as lags."))
-        }
-      }
-      
-      hyper  = matrix(self$prior$hyper[, ncol(self$prior$hyper)])
-      init   = .Call(`_bsvarSIGNs_narrow_hyper`, model, hyper)
-      
-      Y_temp = t(self$prior$Y)
-      N      = ncol(Y_temp)
-      p      = self$p
-      K      = nrow(self$prior$X)
-      d      = K - 1 - N * p
-      
-      self$prior$covid = covid
-
-      prior      = self$prior$get_prior()
-      prior$B    = t(prior$A)
-      prior$Ysoc = t(prior$Ysoc)
-      prior$Xsoc = t(prior$Xsoc)
-      prior$Ysur = t(prior$Ysur)
-      prior$Xsur = t(prior$Xsur)
-      
-      lb = rep(0, length(init))
-      ub = init * 100
-      
-      if (!is.null(covid)) {
-        idx = (length(init) - 3):length(init)
-        lb[idx] = c(1, 1, 1, 0)
-        ub[idx] = c(Inf, Inf, Inf, 1)
-      }
-      
-      result = stats::optim(
-        init,
-        \(x) -.Call(`_bsvarSIGNs_log_posterior_hyper`,
-              .Call(`_bsvarSIGNs_extend_hyper`, hyper, model, matrix(x)),
-              model, t(self$prior$Y), t(self$prior$X), prior),
-        method  = 'L-BFGS-B',
-        lower   = lb,
-        upper   = ub,
-        hessian = TRUE
-        )
-
-      mode       = .Call(`_bsvarSIGNs_extend_hyper`, hyper, model, matrix(result$par))
-      variance   = result$hessian
-
-      if (length(init) == 1){
-        variance = 1 / variance
-      } else {
-        e        = eigen(variance)
-        variance = e$vectors %*% diag(as.vector(1 / abs(e$values))) %*% t(e$vectors)
-      }
-      
-      self$prior$hyper = .Call(`_bsvarSIGNs_sample_hyper`, S, burn_in, mode, model,
-             t(self$prior$Y), t(self$prior$X), variance, prior)
-      self$prior$hyper = self$prior$hyper[, -(1:burn_in)]
-    }, # END estimate_hyper
     
     #' @description
     #' Returns the identifying restrictions as the IdentificationBSVARSIGN object.
@@ -894,7 +1325,7 @@ specify_bsvarSIGN = R6::R6Class(
     #' spec$get_starting_values()
     #'
     get_starting_values = function() {
-      # self$starting_values$clone()
+      self$starting_values$clone()
     } # END get_starting_values
   ) # END public
 ) # END specify_bsvarSIGN

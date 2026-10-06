@@ -10,6 +10,15 @@
 #' 
 #' @param posterior posterior estimation outcome - an object of class 
 #' \code{PosteriorBSVARSIGN} obtained by running the \code{estimate} function.
+#' @param standardise a logical value. If \code{TRUE}, the structural shocks are standardized 
+#' so that the variables' own shocks IRF at horizon 0 are equal to 1. Otherwise, the parameter estimates 
+#' determine this magnitude implying the variance of structural shocks is 1.
+#' @param standardise_scheme matrix Fx2, where F - number of non-diagonal standardized shocks. 
+#' There are two columns: first is shocks and second is variables. 
+#' Every row in \code{standardise_scheme} represents index of shock in first column that 
+#' standardized to variable of index in column 2. For instance, row (5, 4) means that 5th shock 
+#' standardized to variable 4th, whereas in standard standardization scheme to variable 5.
+#' Make sense only if \code{standardise = TRUE}.
 #' 
 #' @return An object of class \code{PosteriorShocks}, that is, an \code{NxTxS} 
 #' array with attribute \code{PosteriorShocks} containing \code{S} draws of the 
@@ -46,16 +55,51 @@
 #'   compute_structural_shocks() -> ss
 #' 
 #' @export
-compute_structural_shocks.PosteriorBSVARSIGN <- function(posterior) {
+compute_structural_shocks.PosteriorBSVARSIGN <- function(posterior, standardise = FALSE, standardise_scheme = NULL) {
   
+  posterior_Theta0  = posterior$posterior$Theta0
   posterior_B     = posterior$posterior$B
   posterior_A     = posterior$posterior$A
   Y               = posterior$last_draw$data_matrices$Y
   X               = posterior$last_draw$data_matrices$X
   
-  ss              = .Call(`_bsvarSIGNs_bsvarSIGNs_structural_shocks`, posterior_B, posterior_A, Y, X)
-  class(ss)       = "PosteriorShocks"
+  if (!standardise) {
+    standardise_idx = 0 
+  }
   
+  if (standardise && is.null(standardise_scheme)) {
+    standardise_idx = 0 
+    if (
+      any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0) &
+      !is.na(any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0))
+    ) {
+      standardise     = FALSE
+      message("Argument standardise is forcibly set to FALSE due to zero restrictions imposed on the diagonal element(s) of the on-impact impulse response matrix.")
+    }
+  }
+  
+  if (standardise && !is.null(standardise_scheme)) {
+    if (!is.matrix(standardise_scheme) || !is.numeric(standardise_scheme) || !length(unique(standardise_scheme[, 1]))==length(standardise_scheme[, 1])) {
+      stop("Provide valid matrix for standardise_scheme")
+    }
+    standardise_idx <- 1:ncol(posterior_Theta0[,,1])
+    standardise_idx[standardise_scheme[, 1]] <- standardise_scheme[, 2]
+    is_null_on_standartised <- any(sapply(seq_along(standardise_idx), 
+                                          function(i) posterior$last_draw$identification$sign_irf[standardise_idx[i],i,1]) == 0, 
+                                   na.rm=T)
+    if (is_null_on_standartised) {
+      standardise     = FALSE
+      standardise_idx = 0 
+      message("Argument standardise is forcibly set to FALSE due to zero restrictions imposed on the standartised element(s) of the on-impact impulse response matrix.")
+    } else {
+      standardise_idx <- standardise_idx - 1 ## Rcpp indexing
+    }
+  }
+
+  ss              = .Call(`_bsvarSIGNs_bsvarSIGNs_structural_shocks`, posterior_B, posterior_A, posterior_Theta0, Y, X, standardise, standardise_idx)
+
+  class(ss)       = "PosteriorShocks"
+
   return(ss)
 } # END compute_structural_shocks.PosteriorBSVARSIGN
 
@@ -117,7 +161,7 @@ compute_fitted_values.PosteriorBSVARSIGN <- function(posterior) {
   N               = dim(posterior_A)[1]
   T               = dim(posterior$last_draw$data_matrices$X)[2]
   S               = dim(posterior_A)[3]
-  posterior_sigma = posterior$posterior$sigma
+  posterior_sigma = array(1, c(N, T, S))
   X               = posterior$last_draw$data_matrices$X
   
   fv              = .Call(`_bsvarSIGNs_bsvarSIGNs_fitted_values`, posterior_A, posterior_B, posterior_sigma, X)
@@ -143,7 +187,13 @@ compute_fitted_values.PosteriorBSVARSIGN <- function(posterior) {
 #' @param horizon a positive integer number denoting the forecast horizon for the impulse responses computations.
 #' @param standardise a logical value. If \code{TRUE}, the impulse responses are standardised 
 #' so that the variables' own shocks at horizon 0 are equal to 1. Otherwise, the parameter estimates 
-#' determine this magnitude.
+#' determine this magnitude implying the variance of structural shocks is 1.
+#' @param standardise_scheme matrix Fx2, where F - number of non-diagonal standardized shocks. 
+#' There are two columns: first is shocks and second is variables. 
+#' Every row in \code{standardise_scheme} represents index of shock in first column that 
+#' standardized to variable of index in column 2. For instance, row (5, 4) means that 5th shock 
+#' standardized to variable 4th, whereas in standard standardization scheme to variable 5.
+#' Make sense only if \code{standardise = TRUE}.
 #' 
 #' @return An object of class PosteriorIR, that is, an \code{NxNx(horizon+1)xS} array with attribute PosteriorIR 
 #' containing \code{S} draws of the impulse responses.
@@ -183,15 +233,7 @@ compute_fitted_values.PosteriorBSVARSIGN <- function(posterior) {
 #' 
 #' 
 #' @export
-compute_impulse_responses.PosteriorBSVARSIGN <- function(posterior, horizon, standardise = FALSE) {
-  
-  if ( 
-    any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0) &
-    !is.na(any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0))
-  ) {
-    standardise = FALSE
-    message("Argument standardise is forcibly set to FALSE due to zero restrictions imposed on the diagonal element(s) of the on-impact impulse response matrix.")
-  }
+compute_impulse_responses.PosteriorBSVARSIGN <- function(posterior, horizon, standardise = FALSE, standardise_scheme = NULL, cum = FALSE) {
   
   posterior_Theta0  = posterior$posterior$Theta0
   posterior_A       = posterior$posterior$A
@@ -200,10 +242,53 @@ compute_impulse_responses.PosteriorBSVARSIGN <- function(posterior, horizon, sta
   p                 = posterior$last_draw$p
   S                 = dim(posterior_A)[3]
   
-  qqq               = .Call(`_bsvarSIGNs_bsvarSIGNs_ir`, posterior_A, posterior_Theta0, horizon, p, standardise)
+  
+  if (!standardise) {
+    standardise_idx = 0 
+  }
+  
+  if (standardise && is.null(standardise_scheme)) {
+    standardise_idx = 0
+    if (
+      any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0) &
+      !is.na(any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0))
+    ) {
+      standardise     = FALSE
+      message("Argument standardise is forcibly set to FALSE due to zero restrictions imposed on the diagonal element(s) of the on-impact impulse response matrix.")
+    }
+  }
+  
+  if (standardise && !is.null(standardise_scheme)) {
+    if (!is.matrix(standardise_scheme) || !is.numeric(standardise_scheme) || !length(unique(standardise_scheme[, 1]))==length(standardise_scheme[, 1])) {
+      stop("Provide valid matrix for standardise_scheme")
+    }
+    standardise_idx <- 1:ncol(posterior_Theta0[,,1])
+    standardise_idx[standardise_scheme[, 1]] <- standardise_scheme[, 2]
+    is_null_on_standartised <- any(sapply(seq_along(standardise_idx), 
+                                          function(i) posterior$last_draw$identification$sign_irf[standardise_idx[i],i,1]) == 0, 
+                                   na.rm=T)
+    if (is_null_on_standartised) {
+      standardise     = FALSE
+      standardise_idx = 0 
+      message("Argument standardise is forcibly set to FALSE due to zero restrictions imposed on the standartised element(s) of the on-impact impulse response matrix.")
+    } else {
+      standardise_idx <- standardise_idx - 1 ## Rcpp indexing
+    }
+  }
+  
+  qqq               = .Call(`_bsvarSIGNs_bsvarSIGNs_ir`, posterior_A, posterior_Theta0, horizon, p, standardise, standardise_idx)
   
   irfs              = array(NA, c(N, N, horizon + 1, S))
+  
   for (s in 1:S) irfs[,,,s] = qqq[s][[1]]
+  if (cum == T) {
+    for (s in 1:S) {
+      for (h in 1:horizon) {
+        irfs[,,h+1,s] = irfs[,,h,s] + irfs[,,h+1,s]
+      }
+    }
+  }
+
   class(irfs)       = "PosteriorIR"
   
   return(irfs)
@@ -226,6 +311,10 @@ compute_impulse_responses.PosteriorBSVARSIGN <- function(posterior, horizon, sta
 #' @param posterior posterior estimation outcome - an object of class 
 #' \code{PosteriorBSVARSIGN} obtained by running the \code{estimate} function.
 #' @param show_progress a logical value, if \code{TRUE} the estimation progress bar is visible
+#' Every row in \code{standardise_scheme} represents index of shock in first column that 
+#' standardized to variable of index in column 2. For instance, row (5, 4) means that 5th shock 
+#' standardized to variable 4th, whereas in standard standardization scheme to variable 5.
+#' Make sense only if \code{standardise = TRUE}.
 #' 
 #' @return An object of class \code{PosteriorHD}, that is, an \code{NxNxTxS} array 
 #' with attribute \code{PosteriorHD} containing \code{S} draws of the historical 
@@ -280,20 +369,32 @@ compute_historical_decompositions.PosteriorBSVARSIGN <- function(posterior, show
   p                 = posterior$last_draw$p
   S                 = dim(posterior_A)[3]
   
-  standardise       = TRUE
-  if ( 
-    any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0) &
-    !is.na(any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0))
-  ) {
-    standardise     = FALSE
-  }
+  standardise = FALSE
+  standardise_idx = 0
   
-  ss                = .Call(`_bsvarSIGNs_bsvarSIGNs_structural_shocks`, posterior_B, posterior_A, Y, X)
-  ir                = .Call(`_bsvarSIGNs_bsvarSIGNs_ir`, posterior_At, posterior_Theta0, T, p, standardise)
+  ss                = .Call(`_bsvarSIGNs_bsvarSIGNs_structural_shocks`, posterior_B, posterior_A, posterior_Theta0, Y, X, standardise, standardise_idx)
+  ir                = .Call(`_bsvarSIGNs_bsvarSIGNs_ir`, posterior_At, posterior_Theta0, T, p, standardise, standardise_idx)
   qqq               = .Call(`_bsvarSIGNs_bsvarSIGNs_hd`, ir, ss, show_progress)
   
   hd                = array(NA, c(N, N, T, S))
   for (s in 1:S) hd[,,,s] = qqq[s][[1]]
+  
+  hd_det = array(NA, c(N, T, S))
+  for (s in 1:S) hd_det[,,s] = posterior$last_draw$data_matrices$Y - apply(hd[,,,s], c(1, 3), sum)
+  attr(hd, "deterministic") = hd_det
+  
+  idx_dummy_R = posterior$last_draw$prior$idx_dummy + 1
+  if (length(idx_dummy_R)>0) {
+    hd_dummy = array(NA, c(N, T, S))
+    for (s in 1:s) {
+      hd_dummy[,,s] = matrix(posterior_A[, idx_dummy_R, s], ncol=length(idx_dummy_R)) %*% 
+                      matrix(X[idx_dummy_R, ], nrow=length(idx_dummy_R))
+                      
+                      
+    }
+    attr(hd, "dummy") = hd_dummy
+  }
+    
   class(hd)         = "PosteriorHD"
   
   return(hd)
@@ -362,17 +463,13 @@ compute_variance_decompositions.PosteriorBSVARSIGN <- function(posterior, horizo
   p                 = posterior$last_draw$p
   S                 = dim(posterior_A)[3]
   
-  standardise       = TRUE
-  if ( 
-    any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0) &
-    !is.na(any(diag(posterior$last_draw$identification$sign_irf[,,1]) == 0))
-  ) {
-    standardise     = FALSE
-  }
+  standardise = FALSE
+  standardise_idx = 0
   
-  posterior_irf     = .Call(`_bsvarSIGNs_bsvarSIGNs_ir`, posterior_A, posterior_Theta0, horizon, p, standardise)
+  posterior_irf     = .Call(`_bsvarSIGNs_bsvarSIGNs_ir`, posterior_A, posterior_Theta0, horizon, p, standardise, standardise_idx)
+  # print("TTTTTTTTTTTT")
   qqq               = .Call(`_bsvarSIGNs_bsvarSIGNs_fevd`, posterior_irf)
-  
+  # print("HHHHHHHHHHHHHHHHHH")
   fevd              = array(NA, c(N, N, horizon + 1, S))
   for (s in 1:S) fevd[,,,s] = qqq[s][[1]]
   class(fevd)       = "PosteriorFEVD"
@@ -436,7 +533,8 @@ compute_conditional_sd.PosteriorBSVARSIGN <- function(posterior) {
   T     = ncol(Y)
   S     = dim(posterior$posterior$A)[3]
   
-  posterior_sigma = posterior$posterior$sigma
+  posterior_sigma       = array(1, c(N, T, S))
+  message("The model is homoskedastic. Returning an NxTxS matrix of conditional sd all equal to 1.")
   class(posterior_sigma)  = "PosteriorSigma"
   
   return(posterior_sigma)

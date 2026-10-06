@@ -1,15 +1,15 @@
 
 #' @title Bayesian estimation of a Structural Vector Autoregression
-#' with traditional and narrative sign restrictions via Gibbs sampler
+#' with sign, zero and narrative sign restrictions
 #'
 #' @description Estimates Bayesian Structural Vector Autoregression model
-#' using the Gibbs sampler proposed by Waggoner & Zha (2003) with traditional sign restrictions 
-#' following Rubio-Ramírez, Waggoner & Zha (2010) and narrative sign restrictions 
+#' with  sign and zero restriction
+#' following Arias, Rubio-Ramírez, Waggoner (2018) and narrative sign restrictions 
 #' following Antolín-Díaz & Rubio-Ramírez (2018). Additionally, the parameter matrices \eqn{A} and \eqn{B}
 #' follow a Minnesota prior and generalised-normal prior distributions respectively with the matrix-specific
 #' overall shrinkage parameters estimated using a hierarchical prior distribution. 
 #' 
-#' Given sign restrictions, in each Gibbs sampler iteration, the sampler draws rotation matrix 
+#' Given sign restrictions in each iteration the sampler draws rotation matrix 
 #' \eqn{Q} uniformly from the space of \code{NxN} orthogonal matrices and checks if the sign restrictions
 #' are satisfied. If a valid \eqn{Q} is found within \code{max_tries} (defined in \code{specify_bsvarSIGN}),
 #' the sampler saves the current \eqn{A} and \eqn{B} draw and proceeds to the next iteration.
@@ -37,8 +37,8 @@
 #' 
 #' @param specification an object of class BSVARSIGN generated using the \code{specify_bsvarSIGN$new()} function.
 #' @param S a positive integer, the number of posterior draws to be generated
-#' @param thin a positive integer, specifying the frequency of MCMC output thinning
 #' @param show_progress a logical value, if \code{TRUE} the estimation progress bar is visible
+#' @param mc.cores number of cores to perform parallel estimation
 #' 
 #' @return An object of class \code{PosteriorBSVARSIGN} containing the Bayesian estimation output and containing two elements:
 #' 
@@ -51,7 +51,7 @@
 #'  the Gibbs sampler performs a total of S+skipped iterations,
 #'  when the sampler does not find a valid rotation matrix \code{Q} within \code{max_tries},
 #'  the current iteration is skipped (i.e. the current draw of \code{A,B} is not saved).
-#'  A message is shown when skipped/(skipped+S/thin) > 0.05, where S/thin is the total number of draws returned.
+#'  A message is shown when skipped/(skipped+S) > 0.05, where S is the total number of draws returned.
 #'  }
 #' }
 #' 
@@ -90,11 +90,7 @@
 #' posterior      = estimate(specification, S = 10)
 #' 
 #' @export
-estimate.BSVARSIGN = function(specification, S, thin = 1, show_progress = TRUE) {
-  
-  if (ncol(specification$prior$hyper) > 1 && S > ncol(specification$prior$hyper)) {
-    stop("The number of requested draws S cannot be greater than the number of sampled hyperparameters.")
-  }
+estimate.BSVARSIGN = function(specification, S, show_progress = TRUE, mc.cores = 1, seed = NULL) {
   
   # get the inputs to estimation
   # prior               = specification$last_draw$prior$get_prior()
@@ -115,39 +111,77 @@ estimate.BSVARSIGN = function(specification, S, thin = 1, show_progress = TRUE) 
   
   Z                   = get_Z(identification$sign_irf)
   sign                = identification$sign_irf
-  sign[is.na(sign)]   = 0
+  sign_cum            = identification$sign_irf_cum
   
-  n_narratives        = length(identification$sign_narrative)
-  get_type            = list("S" = 1, "A" = 2, "B" = 3)
-  if (n_narratives > 0) {
-    narrative         = matrix(NA, n_narratives, 6)
-    for (i in 1:n_narratives) {
-      narrative_list  = identification$sign_narrative[[i]]
-      narrative[i, 1] = get_type[[narrative_list$type]]
-      narrative[i, 2] = narrative_list$sign
-      narrative[i, 3] = narrative_list$var
-      narrative[i, 4] = narrative_list$shock
-      narrative[i, 5] = narrative_list$start - p
-      narrative[i, 6] = narrative_list$periods - 1
-    }
-  } else {
-    narrative         = t(c(0, 1, 1, 1, 1, 1))
+  sign[is.na(sign)]   = 0
+  if (is.null(sign_cum)) {
+    sign_cum = array(0, dim = c(N, N, 1))
   }
+  if (is.matrix(sign_cum)) {
+    sign_cum = array(sign_cum, dim = c(dim(sign_cum), 1))
+  }
+  sign_cum[is.na(sign_cum)] = 0
+  
+  N = ncol(Y)
+  narrative = make_narrative_matrix(
+    sign_narrative = identification$sign_narrative,
+    p              = p,
+    N              = N
+  )
+  
   struc               = identification$sign_structural
   struc[is.na(struc)] = 0
-  Nf                  = specification$num_foreign_vars
-
-  # estimation
-  mc.cores = specification$mc.cores
-  if (is.null(mc.cores)) mc.cores = 1
-  mc.cores = max(1, mc.cores)
-  if (mc.cores > 1) {
-    return(estimate_par(specification, S, thin, show_progress, mc.cores))
+  
+  elasticity = identification$elasticity
+  if (is.null(elasticity) || nrow(elasticity) == 0) {
+    elasticity = matrix(numeric(0), ncol = 7)
+  }
+  elasticity_cum = identification$elasticity_cum
+  if (is.null(elasticity_cum) || nrow(elasticity_cum) == 0) {
+    elasticity_cum = matrix(numeric(0), ncol = 7)
   }
 
+  response_bounds = identification$response_bounds
+  if (is.null(response_bounds) || nrow(response_bounds) == 0) {
+    response_bounds = matrix(numeric(0), ncol = 6)
+  }
+  response_bounds_cum = identification$response_bounds_cum
+  if (is.null(response_bounds_cum) || nrow(response_bounds_cum) == 0) {
+    response_bounds_cum = matrix(numeric(0), ncol = 6)
+  }
+  
+  # estimation
+  # qqq                 = .Call(`_bsvarSIGNs_bsvar_sign_cpp`, S, p, Y, X, 
+  #                             sign, narrative, struc, Z, prior, 
+  #                             show_progress, max_tries)
+  # 
+  # specification$starting_values$set_starting_values(qqq$last_draw)
+  # output              = specify_posterior_bsvarSIGN$new(specification, qqq$posterior)
+  # output              = importance_sampling(output)
+  # 
+  # return(output)
+  
+  
+  make_W = function(N, Z) {
+    W = vector("list", length(Z))
+    for (j in seq_along(Z)) {
+      z_j = nrow(Z[[j]])
+      s   = N + 1 - j - z_j
+      W[[j]] = matrix(rnorm(s * N), s, N)
+    }
+    return(W)
+  }
+  W <- make_W(N, Z)
+
+  if (is.null(seed)) seed <- sample.int(.Machine$integer.max, 1, replace = FALSE)
+  if (mc.cores > 1) {
+    return(estimate_par(specification, S, show_progress, mc.cores, seed, W))
+  }
+  
+  set.seed(seed)
   qqq                 = .Call(`_bsvarSIGNs_bsvar_sign_cpp`, S, p, Y, X, 
-                              sign, narrative, struc, Z, Nf, prior, 
-                              show_progress, thin, max_tries)
+                              sign, sign_cum, narrative, struc, Z, elasticity, elasticity_cum, response_bounds, response_bounds_cum, prior, W,
+                              show_progress, max_tries)
   
   # specification$starting_values$set_starting_values(qqq$last_draw)
   output              = specify_posterior_bsvarSIGN$new(specification, qqq$posterior)
@@ -156,8 +190,9 @@ estimate.BSVARSIGN = function(specification, S, thin = 1, show_progress = TRUE) 
   return(output)
 }
 
+
 # Internal function for parallel estimation
-estimate_par = function(specification, S, thin = 1, show_progress = TRUE, mc.cores) {
+estimate_par = function(specification, S, show_progress = TRUE, mc.cores, seed = seed, W) {
   
   # get the inputs to estimation
   prior               = specification$prior$get_prior()
@@ -177,28 +212,45 @@ estimate_par = function(specification, S, thin = 1, show_progress = TRUE, mc.cor
   
   Z                   = get_Z(identification$sign_irf)
   sign                = identification$sign_irf
-  sign[is.na(sign)]   = 0
+  sign_cum            = identification$sign_irf_cum
   
-  n_narratives        = length(identification$sign_narrative)
-  get_type            = list("S" = 1, "A" = 2, "B" = 3)
-  if (n_narratives > 0) {
-    narrative         = matrix(NA, n_narratives, 6)
-    for (i in 1:n_narratives) {
-      narrative_list  = identification$sign_narrative[[i]]
-      narrative[i, 1] = get_type[[narrative_list$type]]
-      narrative[i, 2] = narrative_list$sign
-      narrative[i, 3] = narrative_list$var
-      narrative[i, 4] = narrative_list$shock
-      narrative[i, 5] = narrative_list$start - p
-      narrative[i, 6] = narrative_list$periods - 1
-    }
-  } else {
-    narrative         = t(c(0, 1, 1, 1, 1, 1))
+  sign[is.na(sign)]   = 0
+  if (is.null(sign_cum)) {
+    sign_cum = array(0, dim = c(N, N, 1))
   }
+  if (is.matrix(sign_cum)) {
+    sign_cum = array(sign_cum, dim = c(dim(sign_cum), 1))
+  }
+  sign_cum[is.na(sign_cum)] = 0
+  
+  N = ncol(Y)
+  narrative = make_narrative_matrix(
+    sign_narrative = identification$sign_narrative,
+    p              = p,
+    N              = N
+  )
+  
   struc               = identification$sign_structural
   struc[is.na(struc)] = 0
-  Nf                  = specification$num_foreign_vars
-
+  
+  elasticity = identification$elasticity
+  if (is.null(elasticity) || nrow(elasticity) == 0) {
+    elasticity = matrix(numeric(0), ncol = 7)
+  }
+  elasticity_cum = identification$elasticity_cum
+  if (is.null(elasticity_cum) || nrow(elasticity_cum) == 0) {
+    elasticity_cum = matrix(numeric(0), ncol = 7)
+  }
+  
+  response_bounds = identification$response_bounds
+  if (is.null(response_bounds) || nrow(response_bounds) == 0) {
+    response_bounds = matrix(numeric(0), ncol = 6)
+  }
+  response_bounds_cum = identification$response_bounds_cum
+  if (is.null(response_bounds_cum) || nrow(response_bounds_cum) == 0) {
+    response_bounds_cum = matrix(numeric(0), ncol = 6)
+  }
+  
   T_obs = nrow(Y)
   N     = ncol(Y)
   K     = ncol(X)
@@ -216,65 +268,82 @@ estimate_par = function(specification, S, thin = 1, show_progress = TRUE, mc.cor
     message("[----|----|----|----|----|----|----|----|----|----|")
   }
   
+  
   S = as.integer(S)
   chunks = split(1:S, sort(rep_len(1:mc.cores, S)))
-  seeds = sample.int(.Machine$integer.max, S, replace = TRUE)
+  # seeds = sample.int(.Machine$integer.max, S, replace = FALSE)
+  
+  worker_func = function(chunk) {
+    chunk_size = length(chunk)
+    is_worker_1 = (chunk[1] == 1)
+    
+    res_list = lapply(seq_along(chunk), function(i) {
+      if (show_progress && is_worker_1) {
+        num_stars = floor(i * 50 / chunk_size) - floor((i - 1) * 50 / chunk_size)
+        if (num_stars > 0) {
+          cat(rep("*", num_stars), sep = "")
+          utils::flush.console()
+        }
+      }
+      
+      .Call(`_bsvarSIGNs_bsvar_sign_par_cpp`, p, Y, X, sign, sign_cum, narrative, struc, Z, elasticity, elasticity_cum, response_bounds, response_bounds_cum, prior, W, max_tries)
+    })
+    
+    if (show_progress && is_worker_1) {
+      cat("|\n")
+      utils::flush.console()
+    }
+    
+    return(res_list)
+  }
   
   is_windows = .Platform$OS.type == "windows"
   
   if (is_windows) {
+    if (show_progress) {
+      message("Progress bar disabled for Windows parallel execution.")
+    }
+    
+    
     cl = parallel::makeCluster(mc.cores, outfile = "")
     on.exit(parallel::stopCluster(cl))
-    parallel::clusterExport(cl, varlist = c("p", "Y", "X", "sign", "narrative", "struc", "Z", "Nf", "prior", "max_tries", "seeds", "S"), envir = environment())
+
+    
+    # FIX: Load required packages on each worker
+    parallel::clusterEvalQ(cl, {
+      Sys.setenv(
+        OMP_NUM_THREADS = "1",
+        MKL_NUM_THREADS = "1",
+        OPENBLAS_NUM_THREADS = "1",
+        VECLIB_MAXIMUM_THREADS = "1"
+      )
+      # # Если используется RcppArmadillo, явно задаем лимит и для него
+      # if (requireNamespace("RcppArmadillo", quietly = TRUE)) {
+      #   RcppArmadillo::armadillo_set_number_of_omp_threads(1)
+      # }
+      
+      library(bsvarSIGNs)
+      library(bsvars)
+    })
+    
+    # parallel::clusterExport(cl, varlist = c("p", "Y", "X", "sign", "narrative", "elasticity", "struc", "Z", "prior", "max_tries", "show_progress"), envir = environment())
+    parallel::clusterSetRNGStream(cl, iseed = seed)
+    results_chunks = parallel::parLapply(cl, chunks, worker_func)
+    
+  } else {
+    RNGkind("L'Ecuyer-CMRG")
+    set.seed(seed)
+    results_chunks = parallel::mclapply(chunks, worker_func, mc.cores = mc.cores, mc.set.seed = TRUE)
+  }
+
+  
+  # Check all chunks for errors
+  is_error = vapply(results_chunks, inherits, logical(1), "try-error")
+  if (any(is_error)) {
+    stop("Error in parallel execution: ", results_chunks[[which(is_error)[1]]])
   }
   
-  results = vector("list", S)
-  stars_printed = 0
-  
-  num_blocks = 50
-  if (S < 50) num_blocks = S
-  blocks = split(1:S, sort(rep_len(1:num_blocks, S)))
-  
-  for (b in 1:num_blocks) {
-    block = blocks[[b]]
-    chunks = split(block, sort(rep_len(1:mc.cores, length(block))))
-    
-    worker_func = function(chunk) {
-      res_list = lapply(seq_along(chunk), function(i) {
-        set.seed(seeds[chunk[i]])
-        idx_cpp = ncol(prior$hyper) - S + chunk[i] - 1
-        .Call(`_bsvarSIGNs_bsvar_sign_par_cpp`, p, Y, X, sign, narrative, struc, Z, Nf, prior, max_tries, idx_cpp)
-      })
-      return(res_list)
-    }
-    
-    if (is_windows) {
-      res_chunks = parallel::parLapply(cl, chunks, worker_func)
-    } else {
-      res_chunks = parallel::mclapply(chunks, worker_func, mc.cores = mc.cores, mc.set.seed = FALSE)
-    }
-    
-    if (inherits(res_chunks[[1]], "try-error")) {
-      stop("Error in parallel execution: ", res_chunks[[1]])
-    }
-    
-    res_flat = unlist(res_chunks, recursive = FALSE)
-    results[block] = res_flat
-    
-    if (show_progress) {
-      stars_to_print = floor(b * 50 / num_blocks) - stars_printed
-      if (stars_to_print > 0) {
-        cat(rep("*", stars_to_print), sep = "")
-        flush(stdout())
-        stars_printed = stars_printed + stars_to_print
-      }
-    }
-  }
-  
-  if (show_progress) {
-    cat("|\n")
-    flush(stdout())
-  }
+  results = unlist(results_chunks, recursive = FALSE)
   
   posterior_w      = matrix(NA, nrow = S, ncol = 1)
   posterior_hyper  = matrix(NA, nrow = nrow(prior$hyper), ncol = S)
