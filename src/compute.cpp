@@ -59,7 +59,18 @@ arma::cube bsvarSIGNs_fitted_values (
     arma::cube&     posterior_sigma,    // NxTxS
     arma::mat&      X                   // KxT
 ) {
-  cube fitted_values = bsvars::bsvars_fitted_values (posterior_A, posterior_B, posterior_sigma, X);
+  
+  const int   N = posterior_A.n_rows;
+  const int   S = posterior_A.n_slices;
+  const int   T = X.n_cols;
+  
+  cube    fitted_values(N, T, S, fill::randn);
+  
+  for (int s=0; s<S; s++) {
+    mat Binv_sigma_norm    = solve(posterior_B.slice(s), posterior_sigma.slice(s) % fitted_values.slice(s));
+    fitted_values.slice(s) = posterior_A.slice(s) * X + Binv_sigma_norm; 
+  } // END s loop
+  
   return fitted_values;
 } // END bsvarSIGNs_fitted_values
 

@@ -2,7 +2,6 @@
 #include <RcppArmadillo.h>
 #include "progress.hpp"
 #include "Rcpp/Rmath.h"
-#include <bsvars.h>
 
 #include "sample_hyper.h"
 #include "sample_Q.h"
