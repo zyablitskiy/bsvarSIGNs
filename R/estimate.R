@@ -1,4 +1,7 @@
 
+#' @export
+estimate <- function(spec, ...) UseMethod("estimate")
+
 #' @title Bayesian estimation of a Structural Vector Autoregression
 #' with sign, zero and narrative sign restrictions
 #'
@@ -323,7 +326,7 @@ estimate_par = function(specification, S, show_progress = TRUE, mc.cores, seed =
       # }
       
       library(bsvarSIGNs)
-      library(bsvars)
+      # library(bsvars)
     })
     
     # parallel::clusterExport(cl, varlist = c("p", "Y", "X", "sign", "narrative", "elasticity", "struc", "Z", "prior", "max_tries", "show_progress"), envir = environment())

@@ -1,4 +1,22 @@
 
+#' @export
+compute_structural_shocks <- function(posterior, ...) UseMethod("compute_structural_shocks")
+
+#' @export
+compute_fitted_values <- function(posterior, ...) UseMethod("compute_fitted_values")
+
+#' @export
+compute_impulse_responses <- function(posterior, ...) UseMethod("compute_impulse_responses")
+
+#' @export
+compute_historical_decompositions <- function(posterior, ...) UseMethod("compute_historical_decompositions")
+
+#' @export
+compute_variance_decompositions <- function(posterior, ...) UseMethod("compute_variance_decompositions")
+
+#' @export
+compute_conditional_sd <- function(posterior, ...) UseMethod("compute_conditional_sd")
+
 
 #' @method compute_structural_shocks PosteriorBSVARSIGN
 #' 
