@@ -448,6 +448,10 @@ plot.PosteriorIR = function(
     shock_label_offset = NULL,
     var_subset = NULL,
     shock_subset = NULL,
+    first_col_width = NULL,
+    omi = c(0.4, 0.1, 0.5, 0.1),
+    mai = c(0.35, 0.5, 0.2, 0.08),
+    
     ...
 ) {
   
@@ -492,8 +496,19 @@ plot.PosteriorIR = function(
   mat <- matrix(seq_len(n_panels), nrow = n_vars, byrow = TRUE)
   
   # First column slightly wider for y-labels
-  col_widths <- rep(1, n_shocks)
-  if (n_shocks > 0) col_widths[1] <- 1.3
+  # The offset value (in lines) can be converted to a width multiplier
+  # Default line width is about 0.2 inches per line
+  if (is.null(first_col_width)) {
+    line_to_width <- 0.2 / (par("pin")[1] / n_shocks)  # fraction per line
+    offset_lines <- if (is.null(y_label_offset)) 2.2 else y_label_offset
+    dynamic_width <- 1 + offset_lines * line_to_width * 0.3  # 0.3 is a tuning factor
+    
+    col_widths <- rep(1, n_shocks)
+    col_widths[1] <- max(1.05, dynamic_width)
+  } else {
+    col_widths <- rep(1, n_shocks)
+    col_widths[1] <- first_col_width
+  }
   
   # Scale text down for large grids (use the larger of the two dimensions)
   max_dim <- max(n_vars, n_shocks)
@@ -508,11 +523,11 @@ plot.PosteriorIR = function(
   oldpar <- graphics::par(no.readonly = TRUE)
   on.exit(graphics::par(oldpar))
   
-  graphics::par(omi = c(0.4, 0.1, 0.5, 0.1))
+  graphics::par(omi = omi)
   graphics::layout(mat, widths = col_widths, heights = rep(1, n_vars))
   
   graphics::par(
-    mai = c(0.35, 0.5, 0.2, 0.08),
+    mai = mai,
     mgp = c(2.5, 0.6, 0),
     tcl = -0.25
   )
@@ -560,6 +575,122 @@ plot.PosteriorIR = function(
   
   invisible(x)
 } # END plot.PosteriorIR
+
+
+
+
+#' @title Plots estimated regime probabilities
+#'
+#' @description Plots of estimated regime probabilities of Markov-switching 
+#' heteroskedasticity or allocations of normal-mixture components including their 
+#' median and percentiles.
+#' 
+#' @param x an object of class PosteriorRegimePr obtained using the
+#' \code{compute_regime_probabilities()} function containing posterior draws of 
+#' regime probabilities.
+#' @param probability a parameter determining the interval to be plotted. The 
+#' interval stretches from the \code{0.5 * (1 - probability)} to 
+#' \code{1 - 0.5 * (1 - probability)} percentile of the posterior distribution.
+#' @param col a colour of the plot line and the ribbon
+#' @param main an alternative main title for the plot
+#' @param xlab an alternative x-axis label for the plot
+#' @param mar.multi the default \code{mar} argument setting in \code{graphics::par}. Modify with care!
+#' @param oma.multi the default \code{oma} argument setting in \code{graphics::par}. Modify with care!
+#' @param ... additional arguments affecting the summary produced.
+#' 
+#' @method plot PosteriorRegimePr
+#' 
+#' @seealso \code{\link{compute_regime_probabilities}}
+#'
+#' @author Tomasz Woźniak \email{wozniak.tom@pm.me}
+#' 
+#' @examples
+#' data(us_fiscal_lsuw)                                  # upload data
+#' set.seed(123)                                         # set seed
+#' specification  = specify_bsvar_msh$new(us_fiscal_lsuw)# specify model
+#' burn_in        = estimate(specification, 10)          # run the burn-in
+#' posterior      = estimate(burn_in, 20, thin = 1)      # estimate the model
+#' 
+#' # compute regime probabilities
+#' rp             = compute_regime_probabilities(posterior)
+#' plot(rp)                                              # plot
+#' 
+#' # workflow with the pipe |>
+#' ############################################################
+#' set.seed(123)
+#' us_fiscal_lsuw |>
+#'   specify_bsvar_msh$new() |>
+#'   estimate(S = 10) |> 
+#'   estimate(S = 20, thin = 1) |> 
+#'   compute_regime_probabilities() |>
+#'   plot()
+#' 
+#' @export
+plot.PosteriorRegimePr = function(
+    x,
+    probability = 0.9,
+    col = "#ff69b4",
+    main,
+    xlab,
+    mar.multi = c(1, 4.6, 0, 2.1),
+    oma.multi = c(6, 0, 5, 0),
+    ...
+) {
+  
+  if ( missing(main) ) main = "Regime Probabilities"
+  if ( missing(xlab) ) xlab = "time"
+  
+  M = dim(x)[1]
+  
+  oldpar <- graphics::par( 
+    mfrow = c(M, 1),
+    mar = mar.multi,
+    oma = oma.multi
+  )
+  on.exit(graphics::par(oldpar))
+  
+  for (m in 1:M) {
+    
+    plot_ribbon(
+      x[m,,],
+      probability = probability,
+      col         = col,
+      main = "",
+      ylim = c(0, 1),
+      ylab = paste("regime ", m),
+      xlab = "",
+      start_at    = 1,
+      bty = "n",
+      axes = FALSE,
+      ...
+    )
+    
+    lw = which(as.numeric(dimnames(x)[[2]]) %% 1 == 0)
+    ll = as.numeric(dimnames(x)[[2]])[lw]
+    graphics::axis(1, at = lw, labels = if (m == M) ll else FALSE)
+    graphics::axis(2, c(0, 1), c(0, 1))
+    
+  } # END n loop
+  
+  graphics::mtext( # main title
+    main,
+    side = 3,
+    line = 2,
+    outer = TRUE
+  )
+  
+  graphics::mtext( # x-axis label
+    xlab,
+    side = 1,
+    line = 3,
+    outer = TRUE
+  )
+  
+  invisible(x)
+} # END plot.PosteriorRegimePr
+
+
+
 
 
 
@@ -968,7 +1099,7 @@ plot.Forecasts = function(
 #'   plot()
 #' 
 #' @export
-plot.PosteriorFEVD = function(
+plot.PosteriorFEVD <- function(
     x,
     shock_names,
     var_names,
@@ -983,25 +1114,39 @@ plot.PosteriorFEVD = function(
     cex.main = 1.4,
     legend.ncol = NULL,
     cex.legend = 1.2,
-    legend.space = 0.3,
+    legend.space = 0.2,
     inset.space.y = 0.1,
     inset.space.x = 0.5,
+    legend.title = "Shocks",
+    legend.title.adj = 0.5,
+    oma = c(2, 0, 4, 0),
+    mar_panel = c(0.5, 5.5, 0.5, 2.1),
     ...
 ) {
-  if(!is.null(probability)) stopifnot("Argument probability must be a number from interval (0,1)." = is.numeric(probability) & length(probability) == 1 & probability > 0 & probability < 1)
+  if (!is.null(probability)) {
+    stopifnot(
+      "Argument probability must be a number from interval (0,1)." =
+        is.numeric(probability) && length(probability) == 1 &&
+        probability > 0 && probability < 1
+    )
+  }
   
-  if ( missing(main) ) {
-    if(!is.null(probability)) {
-      main = paste0("Forecast Error Variance Decompositions (", probability*100, "% quantile)")
+  if (missing(main)) {
+    if (!is.null(probability)) {
+      main <- paste0("Forecast Error Variance Decompositions (", probability * 100, "% quantile)")
     } else {
-      main = "Forecast Error Variance Decompositions (mean)"
+      main <- "Forecast Error Variance Decompositions (mean)"
     }
   }
-  if ( missing(xlab) ) xlab = "horizon"
+  if (missing(xlab)) xlab <- "horizon"
   
-  N_all = dim(x)[1]
-  if ( missing(shock_names) ) shock_names = paste("shock", 1:N_all)
-  if ( missing(var_names) )   var_names   = paste("var", 1:N_all)
+  if (length(dim(x)) < 3) stop("x must be at least a 3-dimensional array.")
+  
+  N_all <- dim(x)[1]
+  if (missing(shock_names)) shock_names <- paste("shock", 1:N_all)
+  if (missing(var_names))   var_names   <- paste("var", 1:N_all)
+  shock_names <- rep_len(shock_names, N_all)
+  var_names   <- rep_len(var_names, N_all)
   
   # --- which_vars handling ---
   if (is.null(which_vars)) {
@@ -1020,107 +1165,152 @@ plot.PosteriorFEVD = function(
   }
   
   k <- length(which_vars)
-  if (ncol < 1) stop("ncol must be at least 1.")
+  if (k == 0) stop("which_vars selects no variables.")
   
-  H = dim(x)[3] - 1
+  ncol <- as.integer(ncol)
+  if (is.na(ncol) || ncol < 1) stop("ncol must be at least 1.")
   
-  if ( missing(cols) ) {
-    fc   = grDevices::colorRampPalette(c("#ff69b4", "#ffd700"))
-    cols = fc(N_all)
+  H <- dim(x)[3] - 1
+  
+  if (missing(cols)) {
+    fc   <- grDevices::colorRampPalette(c("#ff69b4", "#ffd700"))
+    cols <- fc(N_all)
   }
+  cols <- rep_len(cols, N_all)
   
   if (!is.null(probability)) {
-    fevd = apply(x, 1:3, stats::quantile, probs = probability)
+    fevd <- apply(x, 1:3, stats::quantile, probs = probability)
   } else {
-    fevd = apply(x, 1:3, mean)
+    fevd <- apply(x, 1:3, mean)
   }
   
-  FEVD = list()
+  FEVD <- list()
   for (n in 1:N_all) {
-    FEVD[[n]] = rbind(rep(0, H + 1), apply(fevd[n,,], 2, cumsum))
+    FEVD[[n]] <- rbind(rep(0, H + 1), apply(fevd[n, , ], 2, cumsum))
   }
   
   FEVD_sub      <- FEVD[which_vars]
   var_names_sub <- var_names[which_vars]
   
-  # --- multi-column layout ---
   nrow_plots <- ceiling(k / ncol)
-  layout_matrix <- matrix(0, nrow = nrow_plots + 1, ncol = ncol)
-  for (i in 1:k) {
-    r <- ceiling(i / ncol)
-    c <- (i - 1) %% ncol + 1
-    layout_matrix[r, c] <- i
+  
+  if (is.null(legend.ncol)) {
+    legend.ncol <- if (N_all <= 4) N_all else min(4, ceiling(N_all / 2))
   }
-  layout_matrix[nrow_plots + 1, ] <- k + 1   # legend panel
+  legend.ncol <- max(1, min(as.integer(legend.ncol), N_all))
   
-  heights <- c(rep(1, nrow_plots), legend.space)
-  graphics::layout(layout_matrix, heights = heights)
-  
-  oldpar <- graphics::par(mar = c(0, 5.5, 0, 2.1), oma = c(2, 0, 4, 0))
-  on.exit({ graphics::par(oldpar); graphics::layout(1) })
-  
-  # Bottom-most panel in EACH column gets the x-axis
-  bottom_panels <- apply(layout_matrix[1:nrow_plots, , drop = FALSE], 2, function(col) {
-    idx <- which(col > 0)
-    if (length(idx) == 0) return(NA_integer_)
-    col[max(idx)]
+  old_par <- graphics::par(no.readonly = TRUE)
+  on.exit({
+    graphics::par(old_par)
+    graphics::layout(1)
   })
-  bottom_panels <- na.omit(bottom_panels)
   
-  for (ii in 1:k) {
-    is_bottom <- ii %in% bottom_panels
-    
-    graphics::par(mar = c(
-      if (is_bottom) 3.5 else 0,
-      5.5,
-      0, 2.1
-    ))
+
+  # METRIC-FREE LAYOUT
+  #
+  # Relative row heights:
+  #   each panel row : 1                -> residual split equally over rows
+  #   axis strip     : axis_row_rel    -> small fixed share for the x axis
+  #   legend row     : legend_rel      -> exactly legend.space of the page
+  #
+  # All panels use IDENTICAL margins, so equal figure rows mean equal
+  # plotting regions. No par("csi") / par("din") guessing anywhere.
+
+  legend.space <- min(max(legend.space, 0), 0.9)
+  axis_row_rel <- 0.35
+  
+  total_rel  <- (nrow_plots + axis_row_rel) / (1 - legend.space)
+  legend_rel <- max(total_rel - nrow_plots - axis_row_rel, 0.05)
+  
+  heights <- c(rep(1, nrow_plots), axis_row_rel, legend_rel)
+  
+  # Layout matrix: panel rows (0 = empty), then axis row, then legend row.
+  panel_ids <- integer(nrow_plots * ncol)
+  panel_ids[seq_len(k)] <- seq_len(k)
+  panel_mat <- matrix(panel_ids, nrow = nrow_plots, byrow = TRUE)
+  
+  axis_ids  <- k + seq_len(ncol)
+  legend_id <- k + ncol + 1L
+  
+  layout_mat <- rbind(panel_mat, axis_ids, rep(legend_id, ncol))
+  
+  graphics::par(oma = oma)
+  graphics::layout(layout_mat, widths = rep(1, ncol), heights = heights)
+  
+  # Same margins for EVERY panel: this is what makes rows truly equal.
+  mar_panel <- mar_panel
+  
+
+  # Panels
+
+  for (ii in seq_len(k)) {
+    graphics::par(mar = mar_panel)
     
     graphics::plot(
-      x = 0:H, y = FEVD_sub[[ii]][1,], type = "n",
-      ylim = c(0, 100), 
+      x = 0:H, y = FEVD_sub[[ii]][1, ], type = "n",
+      ylim = c(0, 100),
       ylab = var_names_sub[ii],
       main = "", xlab = "", bty = "n", axes = FALSE,
       cex.lab = cex.lab, ...
     )
     
-    for (i in 1:N_all) {
+    for (i in seq_len(N_all)) {
       graphics::polygon(
-        c(0:H, H:0), 
-        c(FEVD_sub[[ii]][i,], rev(FEVD_sub[[ii]][i + 1,])), 
+        c(0:H, H:0),
+        c(FEVD_sub[[ii]][i, ], rev(FEVD_sub[[ii]][i + 1, ])),
         col = cols[i], border = cols[i]
       )
     }
     
-    if (is_bottom) graphics::axis(1, cex.axis = cex.axis)
     graphics::axis(2, c(0, 50, 100), c(0, 50, 100), cex.axis = cex.axis)
   }
   
-  # --- legend ---
-  graphics::par(mar = c(0, 0, 0, 0)); graphics::plot.new()
-  
-  if (is.null(legend.ncol)) {
-    legend.ncol <- if (N_all <= 4) N_all else min(4, ceiling(N_all/2))
+
+  # Axis strip: one thin plot per column, same left/right margins and
+  # same xlim as the panels, so ticks align exactly under each column.
+
+  for (j in seq_len(ncol)) {
+    graphics::par(mar = c(2.2, 5.5, 0, 2.1))
+    graphics::plot.new()
+    graphics::plot.window(xlim = c(0, H), ylim = c(0, 1))
+    graphics::axis(1, cex.axis = cex.axis)
   }
   
-  leg_dim <- legend(
+
+  # Legend row
+
+  graphics::par(mar = c(0, 0, 0, 0), xpd = NA)
+  graphics::plot.new()
+  graphics::plot.window(xlim = c(0, 1), ylim = c(0, 1), xaxs = "i", yaxs = "i")
+  
+  leg_dim <- graphics::legend(
     x = 0.5, y = 0.5, plot = FALSE,
     legend = shock_names, fill = cols, border = cols,
     bty = "n", cex = cex.legend, ncol = legend.ncol, horiz = FALSE,
-    title = "Shocks", title.adj = 0.5, text.font = 1,
-    title.cex = cex.legend * 1.1
+    title = legend.title, title.adj = legend.title.adj,
+    text.font = 1, title.cex = cex.legend * 1.1
   )
   
-  legend(
-    x = inset.space.x - leg_dim$rect$w / 2,
-    y = inset.space.y,
-    xjust = 0, yjust = 0,
+  if (missing(inset.space.x) && missing(inset.space.y)) {
+    legend_x <- 0.5 - leg_dim$rect$w / 2
+    legend_y <- 0.5 - leg_dim$rect$h / 2
+  } else {
+    if (missing(inset.space.x)) inset.space.x <- 0.5
+    legend_x <- inset.space.x - leg_dim$rect$w / 2
+    legend_y <- inset.space.y
+  }
+  
+  graphics::legend(
+    x = legend_x, y = legend_y, xjust = 0, yjust = 0,
     legend = shock_names, fill = cols, border = cols,
     bty = "n", cex = cex.legend, ncol = legend.ncol, horiz = FALSE,
-    title = "Shocks", title.adj = 0.5, text.font = 1,
-    title.cex = cex.legend * 1.1
+    title = legend.title, title.adj = legend.title.adj,
+    text.font = 1, title.cex = cex.legend * 1.1
   )
   
+
+  # Overall title and x label (outer margins)
+
   graphics::mtext(main, side = 3, line = 1.5, outer = TRUE, cex = cex.main, font = 2)
   if (!is.null(xlab)) {
     graphics::mtext(xlab, side = 1, line = 1, outer = TRUE, cex = cex.lab * 0.9, font = 1)
@@ -1207,34 +1397,47 @@ plot.PosteriorHD = function(
     legend.space = 0.3,
     inset.space.y = 0.1,
     inset.space.x = 0.5,
+    legend.title = "Shocks",
+    legend.title.adj = 0.5,
+    oma = c(2, 0, 4, 0),
+    mar_panel = c(0.5, 5.5, 0.5, 2.1),
     ...
 ) {
   
-  if(!is.null(probability)) stopifnot("Argument probability must be a number from interval (0,1)." = is.numeric(probability) & length(probability) == 1 & probability > 0 & probability < 1)
+  if (!is.null(probability)) {
+    stopifnot(
+      "Argument probability must be a number from interval (0,1)." =
+        is.numeric(probability) & length(probability) == 1 &
+        probability > 0 & probability < 1
+    )
+  }
+  
+  if (length(oma) != 4)       stop("oma must be a numeric vector of length 4: c(bottom, left, top, right).")
+  if (length(mar_panel) != 4) stop("mar_panel must be a numeric vector of length 4: c(bottom, left, top, right).")
   
   # --- pull custom attributes BEFORE any `[` subsetting, which drops them ---
-  hd_det   = if (include_deterministic) attr(x, "deterministic") else NULL
-  hd_dummy = if (include_deterministic) attr(x, "dummy") else NULL
+  hd_det   <- if (include_deterministic) attr(x, "deterministic") else NULL
+  hd_dummy <- if (include_deterministic) attr(x, "dummy") else NULL
   
-  if ( missing(main) ) {
-    if(!is.null(probability)) {
-      main = paste0("Historical Decompositions (", probability*100, "% quantile)")
+  if (missing(main)) {
+    if (!is.null(probability)) {
+      main <- paste0("Historical Decompositions (", probability * 100, "% quantile)")
     } else {
-      main = "Historical Decompositions (mean)"
+      main <- "Historical Decompositions (mean)"
     }
   }
-  if ( missing(xlab) ) xlab = NULL
+  if (missing(xlab)) xlab <- NULL
   
   dates <- lubridate::floor_date(
     as.Date(lubridate::date_decimal(
       as.numeric(as.numeric(colnames(spec$data_matrices$Y))) + 0.01
-    )), 
+    )),
     unit = "months"
   )
   
   # === DATE FILTER ===
   if (!is.null(start_date) && !inherits(start_date, "Date")) start_date <- as.Date(start_date)
-  if (!is.null(end_date)   && !inherits(end_date, "Date"))   end_date   <- as.Date(end_date)
+  if (!is.null(end_date)   && !inherits(end_date,   "Date")) end_date   <- as.Date(end_date)
   
   idx <- rep(TRUE, length(dates))
   if (!is.null(start_date)) idx <- idx & (dates >= start_date)
@@ -1243,19 +1446,18 @@ plot.PosteriorHD = function(
   dates <- dates[idx]
   T <- length(dates)
   
-  x <- x[,,idx,, drop = FALSE]
-  if (!is.null(hd_det))   hd_det   = hd_det[, idx, , drop = FALSE]
-  if (!is.null(hd_dummy)) hd_dummy = hd_dummy[, idx, , drop = FALSE]
+  x <- x[, , idx, , drop = FALSE]
+  if (!is.null(hd_det))   hd_det   <- hd_det[, idx, , drop = FALSE]
+  if (!is.null(hd_dummy)) hd_dummy <- hd_dummy[, idx, , drop = FALSE]
   
   if (!is.null(probability)) {
-    hd_mean = apply(x, 1:3, stats::quantile, probs = probability)
+    hd_mean <- apply(x, 1:3, stats::quantile, probs = probability)
   } else {
-    hd_mean = apply(x, 1:3, mean)
+    hd_mean <- apply(x, 1:3, mean)
   }
   
-  N_all = dim(hd_mean)[1]  # original number of response variables
-  
-  if ( missing(var_names) ) var_names = paste("var", 1:N_all)
+  N_all <- dim(hd_mean)[1]
+  if (missing(var_names)) var_names <- paste("var", 1:N_all)
   
   # === which_vars RESOLUTION (operates on ORIGINAL indices/names) ===
   if (is.null(which_vars)) {
@@ -1274,61 +1476,62 @@ plot.PosteriorHD = function(
   }
   
   k <- length(which_vars)
-  if (ncol < 1) stop("ncol must be at least 1.")
+  if (k == 0) stop("which_vars selects no variables.")
+  ncol <- as.integer(ncol)
+  if (is.na(ncol) || ncol < 1) stop("ncol must be at least 1.")
   
-  # === CRITICAL: Subset hd_mean, hd_det, hd_dummy TOGETHER before any further processing ===
+  # === Subset hd_mean, hd_det, hd_dummy TOGETHER ===
   hd_mean <- hd_mean[which_vars, , , drop = FALSE]
   if (!is.null(hd_det))   hd_det   <- hd_det[which_vars, , , drop = FALSE]
   if (!is.null(hd_dummy)) hd_dummy <- hd_dummy[which_vars, , , drop = FALSE]
   
-  # From here on, N_resp refers to the SELECTED subset only
   N_resp <- k
   var_names <- var_names[which_vars]
   
   # --- helper: concatenate along the shock (2nd) dimension ---
-  bind_shock = function(a, b) {
-    da = dim(a); db = dim(b)
-    out = array(0, dim = c(da[1], da[2] + db[2], da[3]))
-    out[, 1:da[2], ] = a
-    out[, (da[2] + 1):(da[2] + db[2]), ] = b
+  bind_shock <- function(a, b) {
+    da <- dim(a); db <- dim(b)
+    out <- array(0, dim = c(da[1], da[2] + db[2], da[3]))
+    out[, 1:da[2], ] <- a
+    out[, (da[2] + 1):(da[2] + db[2]), ] <- b
     out
   }
   
-  extra_names = character(0)
-  extra_cols  = character(0)
+  extra_names <- character(0)
+  extra_cols  <- character(0)
   
   if (!is.null(hd_det)) {
     if (!is.null(hd_dummy)) {
-      baseline = hd_det - hd_dummy  # exclude the contemporaneous dummy piece
+      baseline <- hd_det - hd_dummy
       if (!is.null(probability)) {
-        baseline_mean = apply(baseline, 1:2, stats::quantile, probs = probability)
-        dummy_mean    = apply(hd_dummy, 1:2, stats::quantile, probs = probability)
+        baseline_mean <- apply(baseline, 1:2, stats::quantile, probs = probability)
+        dummy_mean    <- apply(hd_dummy, 1:2, stats::quantile, probs = probability)
       } else {
-        baseline_mean = apply(baseline, 1:2, mean)
-        dummy_mean    = apply(hd_dummy, 1:2, mean)
+        baseline_mean <- apply(baseline, 1:2, mean)
+        dummy_mean    <- apply(hd_dummy, 1:2, mean)
       }
-      hd_mean = bind_shock(hd_mean, array(baseline_mean, dim = c(N_resp, 1, T)))
-      hd_mean = bind_shock(hd_mean, array(dummy_mean,    dim = c(N_resp, 1, T)))
-      extra_names = c(det_name, dummy_name)
-      extra_cols  = c(det_col, dummy_col)
+      hd_mean <- bind_shock(hd_mean, array(baseline_mean, dim = c(N_resp, 1, T)))
+      hd_mean <- bind_shock(hd_mean, array(dummy_mean,    dim = c(N_resp, 1, T)))
+      extra_names <- c(det_name, dummy_name)
+      extra_cols  <- c(det_col, dummy_col)
     } else {
       if (!is.null(probability)) {
-        det_mean = apply(hd_det, 1:2, stats::quantile, probs = probability)
+        det_mean <- apply(hd_det, 1:2, stats::quantile, probs = probability)
       } else {
-        det_mean = apply(hd_det, 1:2, mean)
+        det_mean <- apply(hd_det, 1:2, mean)
       }
-      hd_mean = bind_shock(hd_mean, array(det_mean, dim = c(N_resp, 1, T)))
-      extra_names = det_name
-      extra_cols  = det_col
+      hd_mean <- bind_shock(hd_mean, array(det_mean, dim = c(N_resp, 1, T)))
+      extra_names <- det_name
+      extra_cols  <- det_col
     }
   }
   
-  N_shock = dim(hd_mean)[2]  # structural shocks + deterministic/dummy
+  N_shock <- dim(hd_mean)[2]
   
-  if ( missing(shock_names) ) shock_names = paste("shock", 1:(N_shock - length(extra_names)))
-  shock_names = c(shock_names, extra_names)
+  if (missing(shock_names)) shock_names <- paste("shock", 1:(N_shock - length(extra_names)))
+  shock_names <- c(shock_names, extra_names)
   
-  # === PER-VARIABLE END DATES (now operates on the SELECTED subset) ===
+  # === PER-VARIABLE END DATES ===
   if (!is.null(var_end_dates)) {
     if (length(var_end_dates) != N_resp) {
       stop("Argument var_end_dates must be a vector of length N_resp (", N_resp, ").")
@@ -1342,62 +1545,47 @@ plot.PosteriorHD = function(
     for (n in 1:N_resp) {
       if (!is.na(var_end_dates[n])) {
         zero_idx <- which(dates > var_end_dates[n])
-        if (length(zero_idx) > 0) {
-          hd_mean[n, , zero_idx] <- 0
-        }
+        if (length(zero_idx) > 0) hd_mean[n, , zero_idx] <- 0
       }
     }
   }
   
-  if ( missing(cols) ) {
-    fc   = grDevices::colorRampPalette(c("#ff69b4", "#ffd700"))
-    cols = c(fc(N_shock - length(extra_names)), extra_cols)
+  if (missing(cols)) {
+    fc   <- grDevices::colorRampPalette(c("#ff69b4", "#ffd700"))
+    cols <- c(fc(N_shock - length(extra_names)), extra_cols)
   } else {
-    stopifnot("cols must have length N_shock (structural + deterministic/dummy)." =
-                length(cols) == N_shock)
+    stopifnot(
+      "cols must have length N_shock (structural + deterministic/dummy)." =
+        length(cols) == N_shock
+    )
   }
   
-  y_hat = apply(hd_mean, c(1, 3), sum)
+  y_hat <- apply(hd_mean, c(1, 3), sum)
   
   # === STACKING (positive/negative contributions) ===
-  lower = array(0, dim = c(N_resp, N_shock, T))
-  upper = array(0, dim = c(N_resp, N_shock, T))
+  lower <- array(0, dim = c(N_resp, N_shock, T))
+  upper <- array(0, dim = c(N_resp, N_shock, T))
   
   for (n in 1:N_resp) {
     for (t in 1:T) {
-      pos_cum = 0
-      neg_cum = 0
+      pos_cum <- 0
+      neg_cum <- 0
       for (i in 1:N_shock) {
-        contrib = hd_mean[n, i, t]
+        contrib <- hd_mean[n, i, t]
         if (contrib > 0) {
-          lower[n, i, t] = pos_cum
-          upper[n, i, t] = pos_cum + contrib
-          pos_cum = pos_cum + contrib
+          lower[n, i, t] <- pos_cum
+          upper[n, i, t] <- pos_cum + contrib
+          pos_cum <- pos_cum + contrib
         } else if (contrib < 0) {
-          upper[n, i, t] = neg_cum
-          lower[n, i, t] = neg_cum + contrib
-          neg_cum = neg_cum + contrib
+          upper[n, i, t] <- neg_cum
+          lower[n, i, t] <- neg_cum + contrib
+          neg_cum <- neg_cum + contrib
         }
       }
     }
   }
   
-  # === MULTI-COLUMN LAYOUT ===
-  nrow_plots <- ceiling(k / ncol)
-  layout_matrix <- matrix(0, nrow = nrow_plots + 1, ncol = ncol)
-  for (i in 1:k) {
-    r <- ceiling(i / ncol)
-    c <- (i - 1) %% ncol + 1
-    layout_matrix[r, c] <- i
-  }
-  layout_matrix[nrow_plots + 1, ] <- k + 1  # legend panel
-  
-  heights <- c(rep(1, nrow_plots), legend.space)
-  graphics::layout(layout_matrix, heights = heights)
-  
-  oldpar <- graphics::par(mar = c(0, 5.5, 0, 2.1), oma = c(2, 0, 4, 0))
-  on.exit({ graphics::par(oldpar); graphics::layout(1) })
-  
+  # === ticks ===
   if (T <= 20) {
     tick_indices <- 1:T
   } else {
@@ -1405,28 +1593,63 @@ plot.PosteriorHD = function(
   }
   tick_labels <- format(dates[tick_indices], "%b %Y")
   
-  # Bottom-most panel in EACH column gets the x-axis
-  bottom_panels <- apply(layout_matrix[1:nrow_plots, , drop = FALSE], 2, function(col) {
-    idx <- which(col > 0)
-    if (length(idx) == 0) return(NA_integer_)
-    col[max(idx)]
-  })
-  bottom_panels <- na.omit(bottom_panels)
+
+  # LAYOUT (same rules as the FEVD version)
+  #
+  #  - every panel row : identical margins (mar_panel), identical height
+  #                      = (inner - legend - axis strip) / nrow_plots
+  #  - axis strip row  : fixed height, holds the rotated date labels
+  #  - legend row      : exactly legend.space * device height
+
+  nrow_plots <- ceiling(k / ncol)
   
+  old_par <- graphics::par(no.readonly = TRUE)
+  on.exit({
+    graphics::par(old_par)
+    graphics::layout(1)
+  })
+  
+  csi <- graphics::par("csi")                      # inches per margin line
+  if (!is.finite(csi) || csi <= 0) csi <- 0.2
+  
+  din_in   <- graphics::par("din")[2]
+  inner_in <- din_in - sum(oma[c(1, 3)]) * csi
+  
+  legend.space <- min(max(legend.space, 0), 0.9)
+  legend_in <- legend.space * din_in               # manual legend share
+  axis_in   <- 1.0                                 # room for las = 2 date labels
+  
+  # safety clamps for very small devices
+  legend_in <- min(max(legend_in, 0.5), max(0.5, inner_in - axis_in - 0.5 * nrow_plots))
+  panel_in  <- max((inner_in - legend_in - axis_in) / nrow_plots, 0.4)
+  
+  heights_cm <- c(rep(panel_in, nrow_plots), axis_in, legend_in) * 2.54
+  
+  panel_ids <- integer(nrow_plots * ncol)
+  panel_ids[seq_len(k)] <- seq_len(k)
+  panel_mat <- matrix(panel_ids, nrow = nrow_plots, byrow = TRUE)
+  
+  axis_ids  <- k + seq_len(ncol)
+  legend_id <- k + ncol + 1L
+  layout_mat <- rbind(panel_mat, axis_ids, rep(legend_id, ncol))
+  
+  graphics::par(oma = oma)
+  graphics::layout(
+    layout_mat,
+    widths  = rep(1, ncol),
+    heights = graphics::lcm(heights_cm)
+  )
+  
+  # === panels (identical margins everywhere -> equal plot regions) ===
   for (ii in 1:k) {
-    is_bottom <- ii %in% bottom_panels
+    graphics::par(mar = mar_panel)
     
-    all_vals = c(0, lower[ii, , ], upper[ii, , ], y_hat[ii, ])
-    range_n = range(all_vals, na.rm = TRUE)
-    
-    graphics::par(mar = c(
-      if (is_bottom) 3.5 else 0,
-      5.5, 0, 2.1
-    ))
+    all_vals <- c(0, lower[ii, , ], upper[ii, , ], y_hat[ii, ])
+    range_n  <- range(all_vals, na.rm = TRUE)
     
     graphics::plot(
       x = 1:T, y = y_hat[ii, ], type = "n",
-      ylim = range_n, 
+      ylim = range_n,
       ylab = var_names[ii],
       main = "", xlab = "", bty = "n", axes = FALSE,
       cex.lab = cex.lab, ...
@@ -1448,46 +1671,68 @@ plot.PosteriorHD = function(
     
     graphics::abline(h = 0, lty = 1, col = "black")
     
-    if (is_bottom) {
-      graphics::axis(1, at = tick_indices, labels = tick_labels,
-                     las = 2, cex.axis = cex.axis)
-    }
-    graphics::axis(2, c(range_n[1], 0, range_n[2]), c(NA, 0, NA),
-                   cex.axis = cex.axis)
+    graphics::axis(
+      2,
+      c(range_n[1], 0, range_n[2]), c(NA, 0, NA),
+      cex.axis = cex.axis
+    )
   }
   
-  # --- legend ---
-  graphics::par(mar = c(0, 0, 0, 0)); graphics::plot.new()
+  # === axis strip: left/right margins taken (in inches) from the real
+  # === panels, so ticks align under each column for ANY mar_panel ===
+  side_in <- graphics::par("mai")[c(2, 4)]
+  
+  for (j in seq_len(ncol)) {
+    graphics::par(mai = c(0.85, side_in[1], 0, side_in[2]))
+    graphics::plot.new()
+    graphics::plot.window(xlim = c(1, T), ylim = c(0, 1))
+    graphics::axis(
+      1,
+      at = tick_indices, labels = tick_labels,
+      las = 2, cex.axis = cex.axis
+    )
+  }
+  
+  # === legend row ===
+  graphics::par(mar = c(0, 0, 0, 0), xpd = NA)
+  graphics::plot.new()
+  graphics::plot.window(xlim = c(0, 1), ylim = c(0, 1), xaxs = "i", yaxs = "i")
   
   if (is.null(legend.ncol)) {
-    legend.ncol <- if (N_shock <= 4) N_shock else min(4, ceiling(N_shock/2))
+    legend.ncol <- if (N_shock <= 4) N_shock else min(4, ceiling(N_shock / 2))
   }
+  legend.ncol <- max(1, min(as.integer(legend.ncol), N_shock))
   
-  leg_dim <- legend(
+  leg_dim <- graphics::legend(
     x = 0.5, y = 0.5, plot = FALSE,
     legend = shock_names, fill = cols, border = cols,
     bty = "n", cex = cex.legend, ncol = legend.ncol, horiz = FALSE,
-    title = "Shocks", title.adj = 0.5, text.font = 1,
+    title = legend.title, title.adj = legend.title.adj, text.font = 1,
     title.cex = cex.legend * 1.1
   )
   
-  legend(
-    x = inset.space.x - leg_dim$rect$w / 2,
-    y = inset.space.y,
-    xjust = 0, yjust = 0,
+  if (missing(inset.space.x) && missing(inset.space.y)) {
+    legend_x <- 0.5 - leg_dim$rect$w / 2
+    legend_y <- 0.5 - leg_dim$rect$h / 2
+  } else {
+    if (missing(inset.space.x)) inset.space.x <- 0.5
+    legend_x <- inset.space.x - leg_dim$rect$w / 2
+    legend_y <- inset.space.y
+  }
+  
+  graphics::legend(
+    x = legend_x, y = legend_y, xjust = 0, yjust = 0,
     legend = shock_names, fill = cols, border = cols,
     bty = "n", cex = cex.legend, ncol = legend.ncol, horiz = FALSE,
-    title = "Shocks", title.adj = 0.5, text.font = 1,
+    title = legend.title, title.adj = legend.title.adj, text.font = 1,
     title.cex = cex.legend * 1.1
   )
   
-  graphics::mtext(main, side = 3, line = 1.5, outer = TRUE,
-                  cex = cex.main, font = 2)
+  # === overall title / xlab ===
+  graphics::mtext(main, side = 3, line = 1.5, outer = TRUE, cex = cex.main, font = 2)
   if (!is.null(xlab)) {
-    graphics::mtext(xlab, side = 1, line = 1, outer = TRUE,
-                    cex = cex.lab * 0.9, font = 1)
+    graphics::mtext(xlab, side = 1, line = 1, outer = TRUE, cex = cex.lab * 0.9, font = 1)
   }
   
   invisible(x)
-  
 } # END plot.PosteriorHD
